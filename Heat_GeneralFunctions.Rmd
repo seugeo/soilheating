@@ -1,0 +1,298 @@
+---
+title: "General Functions"
+output: html_document
+date: "2023-11-17"
+---
+```{r}
+# CUSTOM COLOR PALETTE & ORDERS
+  temp_colors <- c("lightblue", "royalblue", "gold", "darkorange", "red")
+  temp_order <- c('Field','Control', '30ºC', '60ºC', '90ºC')
+  tempgroup_colors <- c("turquoise", "darkorange", "red")
+  tempgroup_order <- c('Field/Control/30ºC', '60ºC', '90ºC')
+  horizon_colors <- c("brown", "orange")
+  horizon_order <- c('O','A')
+  cluster_colors <- c('mediumpurple1', 'limegreen')
+  cluster_colors_upset_x2 <- c('limegreen', 'limegreen', 'mediumpurple1', 'mediumpurple1')
+  phylum_colors <- c("Abditibacteriota" = "#F92A0D", "Acidobacteriota" = "#B1F581", "Actinobacteriota" = "#22CBFD", "Altarchaeota" = "#F9D3D7", "Armatimonadota" = "#FE16E3", "Bacteroidota" = "#FAE500", "Bdellovibrionota" = "#0026F9", "Chlamydiota" = "#006C1C", "Chloroflexi" = "#9C0D4B", "Cyanobacteria" = "#1CFEDA", "Dependentiae" = "#FF942E", "Desulfobacterota" = "#6C328B", "Dormibacterota" = "#84530D", "Elusimicrobiota" = "#FE0086", "FCPU426" = "#2E6673", "Fibrobacterota" = "#C840FE", "Firmicutes" = "#1CFD0D", "Gemmatimonadota" = "#FF97E7", "Latescibacterota" = "#7F5668", "Halobacteriota" = "#B6EBEF", "Methanobacteriota" = "#CBC279", "Methylomirabilota" = "#FFff00", "Myxococcota" = "#D4BFF8", "Nitrospirota" = "#909AFE", "Patescibacteria" = "#B51C00", "Planctomycetota" = "#FE9B95", "Proteobacteria" = "#D78EFC", "RCP2-54" = "#940079", "SAR324 clade(Marine group B)" = "#91D5A3", "Thermoplasmatota" = "#FDC05F", "Thermoproteota" = "#7526C3", "Verrucomicrobiota" = "#6E7049", "WPS-2" = "#2665A1", "WS2" = "#1AFE96", "Other" = "gray")
+    collapsed_phylum_colors <- c("Acidobacteriota" = "#7526C3", "Actinobacteriota" = "#75d644", "Bacteroidota" = "#FAE500", "Chloroflexi" = "#2665A1", "Cyanobacteria" = "#1CFEDA", "Firmicutes" = "#2ead57", "Gemmatimonadota" = "#84530D", "Myxococcota" = "#FF942E", "Patescibacteria" = "#22CBFD", "Planctomycetota" =  "#fa4668", "Proteobacteria" = "#D78EFC", "Verrucomicrobiota" = "#FE9B95", "Other" = "darkgray")
+
+  
+# CONVERT COLUMN TO ROWNAMES # make sure to put "" around col and name_values
+col_to_row <- function(data, col, name_values) {
+  # assign reference value to column
+  name_values = data[[col]]
+  # remove whatever column
+  data=data%>%
+    select(-{{col}})
+  # convert to data frame
+  data=data.frame(data)
+  # assign row names (first column) to specified name
+  row.names(data)=name_values
+return(data)}
+
+# REMOVE SINGLETONS (only appears in one sample)
+rmv_sngl <- function(data) {
+  data <- data[rowSums(data>0) >1,]
+  data <- data[, colSums(data)>0]
+return(data)}
+
+# RELATIVIZE
+relativize <- function(data) {
+  data.rel=decostand(data, method = "total", MARGIN = 2)
+return(data.rel)}
+
+# CALCULATE DISTANCE MATRIX
+distance <- function(data.rel) {
+  data.dist=vegdist(t(data.rel), method = "bray")
+return(data.dist)}
+
+# CALCULATE PCOA POINTS
+pcoa <- function(data.dist) {
+  data.pcoa=cmdscale(data.dist, eig = TRUE)
+return(data.pcoa)}
+
+# CREATE DATA FRAME WITH PCOA POINTS
+pcoa.points <- function(data.pcoa) {
+  data.pcoa.points=data.frame(data.pcoa$points)
+  colnames(data.pcoa.points)=c("pcoa1", "pcoa2")
+return(data.pcoa.points)}
+
+# JOIN METADATA AND PCOA DATA
+pcoa.map <- function(data.pcoa.points,map) {
+  data.pcoa.points$ID <- rownames(data.pcoa.points)
+  data.map=left_join(data.pcoa.points,map,by="ID")
+return(data.map)}
+
+# CALCULATE VARIANCE EXPLAINED
+variance <- function(data.pcoa, x) {
+  data.pcoa$eig[x]/sum(data.pcoa$eig)}
+
+# PCOA PLOT w/ color=Treatment
+pcoa.plot.temp <- function(data.map, x_col, y_col, color_col, shape_col, x_label = NULL, y_label = NULL, title = "Title", filename = NULL) {
+  p <- ggplot(data.map, aes(x={{x_col}}, y={{y_col}}, color={{color_col}}, shape={{shape_col}}))+
+  geom_point(size = 6) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  labs(x = ifelse(!is.null(x_label), x_label, as_label(enquo(x_col))), 
+       y = ifelse(!is.null(y_label), y_label, as_label(enquo(y_col))),
+       title = title)+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey"))
+  p + guides(fill = guide_legend(title.position = "top", ncol = 2))
+  if(!is.null(filename)) {
+    ggsave(filename, plot = p, device = "pdf", width = 220, height = 150, units = "mm", dpi = 500)}
+return(p)}
+
+# PCOA PLOT w/ color=TempGroup
+pcoa.plot.tempgroup <- function(data.map, x_col, y_col, color_col, shape_col, x_label = NULL, y_label = NULL, title = "Title", filename = NULL) {
+  p <- ggplot(data.map, aes(x={{x_col}}, y={{y_col}}, color={{color_col}}, shape={{shape_col}}))+
+  geom_point(size = 6) +
+  scale_color_manual(values=tempgroup_colors, limits=tempgroup_order) +
+  labs(x = ifelse(!is.null(x_label), x_label, as_label(enquo(x_col))), 
+       y = ifelse(!is.null(y_label), y_label, as_label(enquo(y_col))),
+       title = title)+
+  theme(axis.title = element_text(size = 25)) +
+  theme(legend.text = element_text(size = 20), legend.position = "right") +
+  theme(legend.title = element_text(size = 25)) +
+  theme(axis.text = element_text(size = 20)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey"))
+  if(!is.null(filename)) {
+    ggsave(filename, plot = p, device = "pdf", width = 200, height = 280, units = "mm", dpi = 500)}
+return(p)}
+
+# PCOA PLOT w/ color=Horizon
+pcoa.plot.horizon <- function(data.map, x_col, y_col, color_col, shape_col, x_label = NULL, y_label = NULL, title = "Title", filename = NULL) {
+  p <- ggplot(data.map, aes(x={{x_col}}, y={{y_col}}, color={{color_col}}, shape={{shape_col}}))+
+  geom_point(size = 6) +
+  scale_color_manual(values=horizon_colors, limits=horizon_order) +
+  labs(x = ifelse(!is.null(x_label), x_label, as_label(enquo(x_col))), 
+       y = ifelse(!is.null(y_label), y_label, as_label(enquo(y_col))),
+       title = title)+
+  theme(axis.title = element_text(size = 25)) +
+  theme(legend.text = element_text(size = 25), legend.position = "right") +
+  theme(legend.title = element_text(size = 25)) +
+  theme(axis.text = element_text(size = 20)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey"))
+  if(!is.null(filename)) {
+    ggsave(filename, plot = p, device = "pdf", width = 220, height = 150, units = "mm", dpi = 500)}
+return(p)}
+
+# Differential Abundance Prep
+daaprep <- function(data.rel, data.count) {
+  #turn abundance table into logical for multiplication (if value non-zero, TRUE)
+  data.abd <- data.rel %>% mutate_if(is.numeric,as.logical)
+  #ensure contig row.name order is in correct order
+  data.abd <- data.abd[match(rownames(data.count), rownames(data.abd)),]
+  #multiply abundance by count table
+  data.count.75 <- data.count * data.abd
+return(data.count.75)}
+
+# Differential Abundance Map #load metadata and re-order 75 filtered counts by metadata order
+daamap <- function(map) {
+  map.daa <- map
+  col_names <- names(map.daa)
+  map.daa[,col_names] <- lapply(map.daa[,col_names] , factor) #change everything to factors
+return(map.daa)}
+
+# Differential Abundance Match
+daamatch <- function(map.daa, data.count.75) {
+  data.count.75 <- data.count.75[, match(map.daa$ID, colnames(data.count.75))]
+return(data.count.75)}
+
+daasetmap <- function(map.daa) {
+  rownames(map.daa) <- map.daa$ID #set rownames to be the ID column
+return(map.daa)}
+
+daaclean <- function(data.count.75){
+  data.count.75.1 <- data.count.75[rowSums(data.count.75)>0, ]
+  # Remove NA Values
+  data.count.75.1.clean <- na.omit(data.count.75.1)
+return(data.count.75.1.clean)}
+
+# Run DeSeq for Temp
+tempdeseq <- function(data.count.75.1.clean, map.daa){
+  dds <- DESeqDataSetFromMatrix(countData = data.count.75.1.clean,colData = map.daa,design = ~ Treatment)
+  dds$Treatment <- relevel(dds$Treatment, ref = "Field")
+  dds <- DESeqDataSetFromMatrix(countData = data.count.75.1.clean,colData = map.daa,design = ~ Treatment)
+  dds <- DESeq(dds)
+return(dds)}
+
+# Enrichment Between Two Variables
+contrast_analysis <- function(dds, temp1, temp2){
+  contrast_result <- tidy(DESeq2::results(dds, contrast=c("Treatment",temp1,temp2))) %>%
+    mutate(Sig = ifelse(p.adjusted > 0.05, "NS", "S")) %>%
+    mutate(Temp_Enrichment = case_when(p.adjusted < 0.05 & estimate > 0 ~ temp1,
+                                      p.adjusted < 0.05 & estimate < 0 ~ temp2,
+                                      p.adjusted >= 0.05 ~ "NS")) %>%
+    add_column(Comparison = paste(temp1, temp2, sep = "_"))
+return(contrast_result)}
+
+# P-Value Adjustment using the Bonferroni method
+padjbon <- function(dds.all){
+  # filter for significant p-values
+  dds.bon <- dds.all %>% filter(p.value <0.05)
+  # add column that uses the bonferroni method to adjust  p-values
+  dds.bon$p.adj2 <- p.adjust(dds.bon$p.value, method = 'bonferroni')
+return(dds.bon)}
+
+# Significant Values and Column Name Adjustment
+sigbon <- function(dds.bon) {
+  dds.bon.s <- filter(dds.bon, p.adj2 < 0.05)
+  colnames(dds.bon.s)[colnames(dds.bon.s) == "gene"] <- "OTU"
+return(dds.bon.s)}
+
+# Take average among Temperature replicates
+avgreps <- function(data, map){
+data.avg <- data %>%
+  rownames_to_column("OTU") %>%
+  pivot_longer(-OTU, names_to = "ID", values_to = "Abundance")
+data.avg$Treatment <- ifelse(data.avg$ID %in% map$ID, map$Treatment[match(data.avg$ID,map$ID)], data.avg$ID)
+data.avg <- data.avg %>%
+  select(-ID) %>%
+  group_by(OTU, Treatment) %>%
+  summarize(Average = mean(Abundance)) %>%
+  ungroup() %>%
+  spread(Treatment, Average) %>%
+  column_to_rownames(var='OTU')
+return(data.avg)}
+
+# Select significantly abundant
+avgsig <- function(data.avg, dds.uniq) {
+  data.avg <- rownames_to_column(data.avg, var = "OTU")
+  data.avg.s <- semi_join(data.avg, dds.uniq, by = "OTU")
+rownames(data.avg.s) <- data.avg.s$OTU
+data.avg.s <- data.avg.s %>%
+  select(-OTU)
+return(data.avg.s)}
+
+# scale before calculating Z-score
+datascale <- function(data.avg.s){
+data.scale <- as.data.frame(scale(t(data.avg.s)))
+data.scale2 <- as.data.frame(t(data.scale))
+data.scale2 <- data.scale2[complete.cases(data.scale2),]
+return(data.scale2)}
+
+# K-means clustering
+kmeansclust <- function(data.scale2){
+km2 <- kmeans(data.scale2, 2)
+km3 <- kmeans(data.scale2, 3)
+km4 <- kmeans(data.scale2, 4)
+km5 <- kmeans(data.scale2, 5)
+km6 <- kmeans(data.scale2, 6)
+
+p1 <- fviz_cluster(km2, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 2")
+p2 <- fviz_cluster(km3, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 3")
+p3 <- fviz_cluster(km4, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 4")
+p4 <- fviz_cluster(km5, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 5")
+p5 <- fviz_cluster(km6, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 6")
+plot_grid(p1, p2, p3, p4, p5, labels = c("k2", "k3", "k4", "k5", "k6"))}
+
+# Assign clusters
+clusterz <- function(data.scale2, data.plots){
+  dist <- dist(as.matrix(data.scale2)) 
+  clust <- hclust(dist, method = "average") 
+  ord.names <- clust$labels[clust$order] 
+  ord.tmp <- data.frame(OTU = ord.names, order = 1:length(ord.names))
+  cut <- cutree(clust[c(1,2,4)], k = k)
+  ord.tmp$Cluster <- as.factor(cut[ord.tmp$OTU])
+  data.plotz <- data.plots %>% 
+  inner_join(ord.tmp, by = 'OTU') %>% 
+  mutate(Trend = case_when(Cluster == 1 ~ "Heat Sensitive",
+                           Cluster == 2 ~ "Heat Tolerant"))
+return(data.plotz)}
+
+# Plot cluster trends
+plotclusters <- function(data.plotz, title = "Title", filename = NULL){
+clusterplotz <- data.plotz %>% 
+  ggplot(aes(x = factor(Treatment, level=temp_order), Zscore)) +
+  geom_jitter(aes(fill = Trend), pch =21, alpha = 0.3, size = 1.5, col = 'black', width = 0.1)+
+  geom_line(data = . %>% group_by(Trend, Treatment) %>% summarise(CMeanZS = mean(Zscore)), aes(y = CMeanZS, group = Trend), color = "gray", size = 1) +
+  facet_wrap(~ Trend, ncol = 1) +
+  labs(title, x ="Treatment", y= "OTU abundance (z-score)")  +
+  theme_linedraw() +
+  scale_fill_manual(values = cluster_colors) + 
+  theme(text = element_text(size = 20),
+        legend.position = "none")
+if(!is.null(filename)) {
+    ggsave(filename, plot = clusterplotz, device = "pdf", width = 200, height = 150, units = "mm", dpi = 500)}
+return(clusterplotz)}
+
+# Cluster Membership
+clustmember <- function(data.plotz, subgroup = "subgroup"){
+data.plotz.uniq <- data.plotz %>%
+  distinct(OTU, .keep_all = TRUE) %>%
+  select(-Treatment, -Trend, -Zscore, -order) %>%
+  mutate(subgroup)
+data.plotz.uniq <- unite(data.plotz.uniq, Cluster_subgroup, Cluster, subgroup, sep = "_")
+return(data.plotz.uniq)}
+
+# Cluster Membership Upset Prep
+clustupset <- function(data.plotz.uniq){
+data.clupset <- data.plotz.uniq %>%
+  mutate(present = TRUE) %>%
+  spread(Cluster_subgroup, present, fill = FALSE)
+return(data.clupset)}
+
+
+# Keep cluster OTUs that are present in the 2 subgroups represented
+clustpresent2 <- function(df1.dds.all, df2.dds.all) {
+  df1.OTU <- df1.dds.all
+colnames(df1.OTU)[colnames(df1.OTU) == "gene"] <- "OTU"
+df1.OTU <- df1.OTU %>%
+  distinct(OTU, .keep_all = FALSE)
+df2.OTU <- df2.dds.all
+colnames(df2.OTU)[colnames(df2.OTU) == "gene"] <- "OTU"
+df2.OTU <- df2.OTU %>%
+  distinct(OTU, .keep_all = FALSE)
+df1.df2.OTU <- inner_join(df1.OTU, df2.OTU, by = "OTU")
+return(df1.df2.OTU)}
+```
+
