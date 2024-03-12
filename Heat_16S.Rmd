@@ -1,0 +1,1208 @@
+---
+title: "Ch1Heat_16S"
+output: html_document
+date: "2023-11-17"
+---
+
+```{r}
+# LOAD PACKAGES
+library(tidyverse)
+library(vegan)
+library(dplyr)
+library(ggplot2)
+library(DESeq2)
+library(factoextra)
+library(gridExtra)
+library(cowplot)
+library(ComplexUpset)
+
+# MAKE SURE TO LOAD ALL GENERAL FUNCTIONS FROM Heat_GeneralFunctions.Rmd
+
+# LOAD & CLEAN TAXONOMY DATA
+tax_all <- readRDS("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/rds/tax_all.RDS")
+# Change NAs in taxonomy to "unknown"
+tax_all$Family[is.na(tax_all$Family)] <- "Unknown Family"
+tax_all$Order <- factor(tax_all$Order, levels = c(levels(tax_all$Order), "Unknown Order"))
+tax_all$Order[is.na(tax_all$Order)] <- "Unknown Order"
+# remove mitochondria and chloroplast
+criteria <- !(tax_all$Family == "Mitochondria" | tax_all$Order == "Chloroplast")
+tax_filtered <- tax_all[criteria, ]
+
+# LOAD & CLEAN ABUNDANCE DATA
+asv_all <- readRDS("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/rds/asv_all.RDS")
+asv_all <- as.data.frame(asv_all)
+asv_all$OTU_ID <- rownames(asv_all)
+# make sure that asv_all is in the same order as tax_all by OTU_ID (return = TRUE)
+check_column <- "OTU_ID"
+all(asv_all[[check_column]] == tax_all[[check_column]])
+rownames(asv_all) <- NULL
+#remove ASVs that were assigned Mitochondria or Chloroplast
+asv_filtered <- asv_all[!(tax_all$Family=="Mitochondria"),]
+tax_no_mitochondria <- tax_all[!(tax_all$Family=="Mitochondria"),]
+asv_filtered <- asv_filtered[!(tax_no_mitochondria$Order=="Chloroplast"),]
+
+# SELECT FOR HEATING EXPERIMENT DATASET
+#load heat mapping data
+all_map=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/16S_ID.txt", delim = "\t", col_names = TRUE)
+#change SampleID to ID
+colnames(all_map)[colnames(all_map) == "SampleID"] <- "ID"
+#subset heating 16S data
+heat.asv <- asv_filtered[,all_map$Experiment=="Heat"]
+heat.asv <- subset(heat.asv, select = -c(FIRE061, FIRE060))
+
+# PREP ABUNDANCE DATA
+#do some other things to prep data frame
+rownames(heat.asv) <- heat.asv$OTU_ID
+heat.asv$OTU_ID <- NULL
+# remove rows with just zeroes (24,270)
+heat.asv <- heat.asv[rowSums(heat.asv>0) >0,]
+# remove singletons (6,860) 
+heat.asv <- rmv_sngl(heat.asv)
+heat.asv$OTU_ID <- rownames(heat.asv)
+ASVs_filtered <- row.names(heat.asv)
+
+write.csv(heat.asv, "16S_rRNA_ASV_Abundance_Table.csv")
+
+#load mapping data to subset within heating dataset 
+heat_map=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/heat16S_metadata.txt", delim = "\t", col_names = TRUE)
+colnames(heat_map)[colnames(heat_map) == "SampleID"] <- "ID"
+heat_map <- subset(heat_map, ID !="FIRE061")
+heat_map <- subset(heat_map, ID !="FIRE060")
+heat_map$Virome[heat_map$Virome == "yes"] <- "Virome"
+heat_map$Virome[heat_map$Virome == "no"] <- "Bulk"
+write.table(x=heat_map, file = "16SHeat_Metadata.tsv", quote=FALSE, sep="\t")
+heat_map=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/heat16S_mapwrep.txt", delim = "\t", col_names = TRUE)
+heat_map <- heat_map %>%
+  mutate(Treatment = case_when(
+    Temp == "Control" ~ "Field",
+    Temp == "10C" ~ "Control",
+    Temp == "30C" ~ "30ºC",
+    Temp == "60C" ~ "60ºC", 
+    Temp == "90C" ~ "90ºC")) %>%
+  mutate(TempGroup = case_when(
+    Treatment == "Field" ~ "Field/Control/30ºC", 
+    Treatment == "Control" ~ "Field/Control/30ºC", 
+    Treatment == "30ºC" ~ "Field/Control/30ºC", 
+    Treatment == "60ºC" ~ "60ºC", 
+    Treatment == "90ºC" ~ "90ºC")) %>%
+  mutate(Sample = case_when(
+    Virome == "Bulk" ~ "Total",
+    Virome == "Virome" ~ "Virome"))
+
+```
+# Visualize Taxonomy Data at the Phylum Level
+```{r}
+# ALL DATA
+# Join taxonomy and abundance data together
+tax_heat <- left_join(heat.asv, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(heat.asv[[check_column]] == tax_heat[[check_column]])
+# pivot table and group by Phylum
+tax_heat.long <- pivot_longer(tax_heat, cols=1:60, names_to = "ID", values_to = "counts")
+heat.phylum.long <- group_by(tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# in order to get rid of white lines in stacked bar plot, I should summarize count of each phyla by "Temp x Virome" and it probably uses code similar to below, but I don't know what it is yet
+#heat.phylum.summary <- group_by(heat.phylum.long, Phylum, ID) %>%
+ #summarize(counts=mean(counts))
+
+# Prep data frame for plotting
+heat.phylum.map <- merge(heat.phylum.long, heat_map, by="ID")
+
+# Plot
+phylum <- ggplot(heat.phylum.map, aes(x=factor(Temp, level = temp_order), y=counts, fill=Phylum))+
+    labs(x="Temperature", 
+       y ="Counts",
+       title = "Heating 16S rRNA ASV Profile")+
+  geom_bar(stat="identity", position = "fill")+
+  scale_fill_manual(values=phylum_colors) +
+  theme_bw()+
+  facet_wrap(~Virome + as.factor(Horizon))
+
+phylum <- ggsave("allheat_phylum.png", width = 8.6, height = 6, units = "in", dpi = 500)
+
+phyla_names <- unique(heat.phylum.map$Phylum)
+
+actino <- heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota") %>%
+  mutate(TempNum = case_when(
+    Temp == "Control" ~ 0, 
+    Temp == "10C" ~ 10, 
+    Temp == "30C" ~ 30, 
+    Temp == "60C" ~ 60, 
+    Temp == "90C" ~ 90)) 
+
+actino%>%
+  filter(Temp != "Control") %>%
+  ggplot(aes(x = TempNum, y = counts))+
+  geom_point() + facet_wrap(~Horizon)
+
+mdl_temp_action <- lm(actino$counts ~ actino$TempNum)
+summary(mdl_temp_action)
+
+cor.test(actino$counts, actino$TempNum,
+         alternative = c("two.sided"),
+         method = c("pearson"),
+         exact = NULL, conf.level = 0.95)
+         
+
+phylumID <- ggplot(heat.phylum.map, aes(x=ID, y=counts, fill=Phylum))+
+    labs(x="Sample ID", 
+       y ="Counts",
+       title = "Heating 16S rRNA ASV Profile by Sample")+
+  geom_bar(stat="identity", position = "fill")+
+  scale_fill_manual(values=phylum_palette) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+phylumID <- ggsave("allheatID_phylum.png", width = 8.6, height = 6, units = "in", dpi = 500)
+```
+
+```{r}
+# SUBSET BY O HORIZON (only bulk data)
+ob.asv.rare$OTU_ID <- rownames(ob.asv.rare)
+
+# Join taxonomy and abundance data together
+ob_tax_heat <- left_join(ob.asv.rare, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(ob.asv.rare[[check_column]] == ob_tax_heat[[check_column]])
+# pivot table and group by Phylum
+ob_tax_heat.long <- pivot_longer(ob_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
+ob.heat.phylum.long <- group_by(ob_tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# rarefied to 32,000
+# collapse phyla into "other" category if represents less than 1%, which is 320
+ob.heat.phylum.long$Phylum <- as.character(ob.heat.phylum.long$Phylum)
+
+ob.heat.phylum.long <- ob.heat.phylum.long %>%
+  group_by(Phylum) %>%
+  mutate(NewPhylum = ifelse(all(counts < 320), 'Other', Phylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+ob.heat.phylum.map <- merge(ob.heat.phylum.long, ob_map, by="ID")
+ob.heat.phylum.map <- ob.heat.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+
+
+ob.heat.phylum.map$TreatRep <- factor(ob.heat.phylum.map$TreatRep, levels = unique(ob.heat.phylum.map$TreatRep))
+
+# Plot
+OBphylumID <- ggplot(ob.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
+    labs(x="Sample ID", 
+       y ="Relative Abundance",
+       title = "16S rRNA ASV Profile by Sample (O, Total DNA)")+
+  geom_bar(stat="identity", position = "fill")+
+  geom_vline(xintercept = c(3.5, 6.5, 9.5, 12.5), linetype = "solid", color = "black", size = 1)+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "none")
+
+OBphylumID <- ggsave("OBID_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+
+
+# SUBSET BY A HORIZON (only bulk data)
+ab.asv.rare$OTU_ID <- rownames(ab.asv.rare)
+
+# Join taxonomy and abundance data together
+ab_tax_heat <- left_join(ab.asv.rare, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(ab.asv.rare[[check_column]] == ab_tax_heat[[check_column]])
+# pivot table and group by Phylum
+ab_tax_heat.long <- pivot_longer(ab_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
+ab.heat.phylum.long <- group_by(ab_tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# rarefied to 28,000
+# collapse phyla into "other" category if represents less than 1%, which is 280
+ab.heat.phylum.long$Phylum <- as.character(ab.heat.phylum.long$Phylum)
+
+ab.heat.phylum.long <- ab.heat.phylum.long %>%
+  group_by(Phylum) %>%
+  mutate(NewPhylum = ifelse(all(counts <280), 'Other', Phylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+ab.heat.phylum.map <- merge(ab.heat.phylum.long, ab_map, by="ID")
+ab.heat.phylum.map <- ab.heat.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+
+ab.heat.phylum.map$TreatRep <- factor(ab.heat.phylum.map$TreatRep, levels = unique(ab.heat.phylum.map$TreatRep))
+
+# Plot
+ABphylumID <- ggplot(ab.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
+    labs(x="Sample ID", 
+       y ="Relative Abundance",
+       title = "16S rRNA ASV Profile by Sample (A, Total DNA)")+
+  geom_bar(stat="identity", position = "fill")+
+  geom_vline(xintercept = c(3.5, 6.5, 9.5, 12.5), linetype = "solid", color = "black", size = 1)+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")
+
+ABphylumID <- ggsave("ABID_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+```
+
+
+```{r}
+# SUBSET BY O HORIZON (virome)
+ov.asv.rare$OTU_ID <- rownames(ov.asv.rare)
+
+# Join taxonomy and abundance data together
+ov_tax_heat <- left_join(ov.asv.rare, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(ov.asv.rare[[check_column]] == ov_tax_heat[[check_column]])
+# pivot table and group by Phylum
+ov_tax_heat.long <- pivot_longer(ov_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
+ov.heat.phylum.long <- group_by(ov_tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# rarefied to 32,000
+# collapse phyla into "other" category if represents less than 1%, which is 320
+ov.heat.phylum.long$Phylum <- as.character(ov.heat.phylum.long$Phylum)
+
+ov.heat.phylum.long <- ov.heat.phylum.long %>%
+  group_by(Phylum) %>%
+  mutate(NewPhylum = ifelse(all(counts < 320), 'Other', Phylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+ov.heat.phylum.map <- merge(ov.heat.phylum.long, ov_map, by="ID")
+ov.heat.phylum.map <- ov.heat.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+
+
+ov.heat.phylum.map$TreatRep <- factor(ov.heat.phylum.map$TreatRep, levels = unique(ov.heat.phylum.map$TreatRep))
+
+# Plot
+OVphylumID <- ggplot(ov.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
+    labs(x="Sample ID", 
+       y ="Relative Abundance",
+       title = "16S rRNA ASV Profile by Sample (O, Untreated Virome)")+
+  geom_bar(stat="identity", position = "fill")+
+  geom_vline(xintercept = c(3.5, 6.5, 9.5, 12.5), linetype = "solid", color = "black", size = 1)+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")
+
+OVphylumID <- ggsave("OVID_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+
+
+# SUBSET BY A HORIZON (only bulk data)
+av.asv.rare$OTU_ID <- rownames(av.asv.rare)
+
+# Join taxonomy and abundance data together
+av_tax_heat <- left_join(av.asv.rare, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(av.asv.rare[[check_column]] == av_tax_heat[[check_column]])
+# pivot table and group by Phylum
+av_tax_heat.long <- pivot_longer(av_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
+av.heat.phylum.long <- group_by(av_tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# rarefied to 48,000
+# collapse phyla into "other" category if represents less than 1%, which is 480
+av.heat.phylum.long$Phylum <- as.character(av.heat.phylum.long$Phylum)
+
+av.heat.phylum.long <- av.heat.phylum.long %>%
+  group_by(Phylum) %>%
+  mutate(NewPhylum = ifelse(all(counts < 480), 'Other', Phylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+av.heat.phylum.map <- merge(av.heat.phylum.long, av_map, by="ID")
+av.heat.phylum.map <- av.heat.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+
+av.heat.phylum.map$TreatRep <- factor(av.heat.phylum.map$TreatRep, levels = unique(av.heat.phylum.map$TreatRep))
+
+# Plot
+AVphylumID <- ggplot(av.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
+    labs(x="Sample ID", 
+       y ="Relative Abundance",
+       title = "16S rRNA ASV Profile by Sample (A, Untreated Virome)")+
+  geom_bar(stat="identity", position = "fill")+
+  geom_vline(xintercept = c(3.5, 6.5, 9.5, 12.5), linetype = "solid", color = "black", size = 1)+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")
+
+AVphylumID <- ggsave("AVID_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+```
+
+# Create phyla legend
+```{r}
+phyla_colors <- data.frame(
+  phyla = c("Abditibacteriota", "Acidobacteriota", "Actinobacteriota", "Altarchaeota", "Armatimonadota", "Bacteroidota", "Bdellovibrionota", "Chlamydiota", "Chloroflexi", "Cyanobacteria", "Dependentiae", "Desulfobacterota", "Dormibacterota", "Elusimicrobiota", "FCPU426","Fibrobacterota", "Firmicutes", "Gemmatimonadota", "Latescibacterota", "Halobacteriota", "Methanobacteriota", "Methylomirabilota", "Myxococcota", "Nitrospirota", "Patescibacteria", "Planctomycetota", "Proteobacteria", "RCP2-54", "SAR324 clade(Marine group B)", "Thermoplasmatota", "Thermoproteota", "Verrucomicrobiota", "WPS-2", "WS2"),
+  colors = c("#F92A0D", "#B1F581", "#22CBFD", "#F9D3D7", "#FE16E3","#FAE500", "#0026F9","#006C1C","#9C0D4B","#1CFEDA","#FF942E","#6C328B","#84530D","#FE0086","#2E6673","#C840FE","#1CFD0D","#FF97E7","#7F5668", "#B6EBEF","#CBC279","#FFff00","#D4BFF8","#909AFE", "#B51C00","#FE9B95","#D78EFC","#940079","#91D5A3","#FDC05F","#7526C3","#6E7049","#2665A1","#1AFE96")
+)
+
+phyla_legend <- ggplot(phyla_colors, aes(x = 1, y = phyla, fill = phyla)) +
+  geom_tile(show.legend = TRUE) +
+  scale_fill_manual(values = phyla_colors$colors) +
+  theme(legend.position = "bottom")
+
+phyla_legend <- ggsave("phylalegend.png", width = 10, height = 6, units = "in", dpi = 500)
+
+
+collapsed_phyla_colors <- data.frame(
+  phyla = c("Acidobacteriota", "Actinobacteriota", "Bacteroidota", "Chloroflexi", "Cyanobacteria", "Firmicutes", "Gemmatimonadota", "Myxococcota", "Patescibacteria", "Planctomycetota", "Proteobacteria", "Verrucomicrobiota", "Other"),
+  colors = c("#7526C3","#75d644","#FAE500","#2665A1","#1CFEDA","#2ead57","#84530D","#FF942E","#22CBFD","#fa4668","#D78EFC","#FE9B95","darkgray")
+)
+
+phyla_order <- c("Acidobacteriota", "Actinobacteriota", "Bacteroidota", "Chloroflexi", "Cyanobacteria", "Firmicutes", "Gemmatimonadota", "Myxococcota", "Patescibacteria", "Planctomycetota", "Proteobacteria", "Verrucomicrobiota", "Other")
+
+collapsed_phyla_legend <- ggplot(collapsed_phyla_colors, aes(x = 1, y = factor(phyla, level=phyla_order), fill = phyla)) +
+  geom_tile(show.legend = TRUE) +
+  scale_fill_manual(values = collapsed_phyla_colors$colors, limits = phyla_order) +
+  labs(fill = "Phyla")+
+  theme(legend.position = "bottom")
+collapsed_phyla_legend + guides(fill = guide_legend(title.position = "top", ncol = 3))
+
+collapsed_phyla_legend <- ggsave("collapsed_phylalegend.pdf", width = 200, height = 200, units = "mm", dpi = 500)
+```
+
+
+# STATS
+```{r}
+# O horizon, total DNA
+acido_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Acidobacteriota")
+actino_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota")
+bact_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Bacteroidota")
+firm_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Firmicutes")
+myxo_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Myxococcota")
+plancto_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Planctomycetota")
+proteo_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Proteobacteria")
+verru_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Verrucomicrobiota")
+
+kruskal.test(counts ~ Treatment, acido_ob)
+kruskal.test(counts ~ TempGroup, acido_ob)
+
+kruskal.test(counts ~ Treatment, actino_ob)
+kruskal.test(counts ~ TempGroup, actino_ob)
+
+kruskal.test(counts ~ Treatment, bact_ob)
+kruskal.test(counts ~ TempGroup, bact_ob)
+
+kruskal.test(counts ~ Treatment, firm_ob)
+kruskal.test(counts ~ TempGroup, firm_ob)
+
+kruskal.test(counts ~ Treatment, myxo_ob)
+kruskal.test(counts ~ TempGroup, myxo_ob)
+
+kruskal.test(counts ~ Treatment, plancto_ob)
+kruskal.test(counts ~ TempGroup, plancto_ob)
+
+kruskal.test(counts ~ Treatment, proteo_ob)
+kruskal.test(counts ~ TempGroup, proteo_ob)
+
+kruskal.test(counts ~ Treatment, verru_ob)
+kruskal.test(counts ~ TempGroup, verru_ob)
+
+ggplot(firm_ob, aes(x=Treatment, y=counts, color = Treatment))+
+         geom_boxplot()
+
+ggplot(firm_ob, aes(x=TempGroup, y=counts, color = TempGroup))+
+         geom_boxplot()
+
+ggplot(myxo_ob, aes(x=Treatment, y=counts, color = Treatment))+
+         geom_boxplot()
+```
+
+```{r}
+# A horizon, total DNA
+
+acido_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Acidobacteriota")
+actino_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota")
+bact_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Bacteroidota")
+chloro_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Chloroflexi")
+firm_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Firmicutes")
+gemma_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Gemmatimonadota")
+myxo_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Myxococcota")
+plancto_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Planctomycetota")
+proteo_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Proteobacteria")
+verru_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Verrucomicrobiota")
+
+kruskal.test(counts ~ Treatment, acido_ab)
+kruskal.test(counts ~ Treatment, actino_ab)
+kruskal.test(counts ~ Treatment, bact_ab)
+kruskal.test(counts ~ Treatment, chloro_ab)
+kruskal.test(counts ~ Treatment, firm_ab)
+kruskal.test(counts ~ Treatment, gemma_ab)
+kruskal.test(counts ~ Treatment, myxo_ab)
+kruskal.test(counts ~ Treatment, plancto_ab)
+kruskal.test(counts ~ Treatment, proteo_ab)
+kruskal.test(counts ~ Treatment, verru_ab)
+```
+
+```{r}
+# O horizon, nonDNase virome
+acido_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Acidobacteriota")
+actino_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota")
+bact_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Bacteroidota")
+firm_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Firmicutes")
+myxo_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Myxococcota")
+patesci_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Patescibacteria")
+plancto_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Planctomycetota")
+proteo_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Proteobacteria")
+verru_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Verrucomicrobiota")
+
+kruskal.test(counts ~ Treatment, acido_ov)
+kruskal.test(counts ~ Treatment, actino_ov)
+kruskal.test(counts ~ Treatment, bact_ov)
+kruskal.test(counts ~ Treatment, firm_ov)
+kruskal.test(counts ~ Treatment, myxo_ov)
+kruskal.test(counts ~ Treatment, patesci_ov)
+kruskal.test(counts ~ Treatment, plancto_ov)
+kruskal.test(counts ~ Treatment, proteo_ov)
+kruskal.test(counts ~ Treatment, verru_ov)
+```
+
+
+```{r}
+# A horizon, nonDNase virome
+
+acido_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Acidobacteriota")
+actino_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota")
+bact_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Bacteroidota")
+chloro_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Chloroflexi")
+firm_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Firmicutes")
+myxo_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Myxococcota")
+patesci_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Patescibacteria")
+plancto_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Planctomycetota")
+proteo_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Proteobacteria")
+verru_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Verrucomicrobiota")
+
+kruskal.test(counts ~ Treatment, acido_av)
+kruskal.test(counts ~ Treatment, actino_av)
+kruskal.test(counts ~ Treatment, bact_av)
+kruskal.test(counts ~ Treatment, chloro_av)
+kruskal.test(counts ~ Treatment, firm_av)
+kruskal.test(counts ~ Treatment, myxo_av)
+kruskal.test(counts ~ Treatment, patesci_av)
+kruskal.test(counts ~ Treatment, plancto_av)
+kruskal.test(counts ~ Treatment, proteo_av)
+kruskal.test(counts ~ Treatment, verru_av)
+
+
+
+
+pairwise.wilcox.test(actino$counts, actino$Treatment, p.adjust.method = "fdr")
+pairwise.wilcox.test(acido$counts, acido$Treatment, p.adjust.method = "fdr")
+pairwise.wilcox.test(bact$counts, bact$Treatment, p.adjust.method = "fdr")
+pairwise.wilcox.test(firm_ob$counts, firm_ob$Treatment, p.adjust.method = "none")
+pairwise.wilcox.test(proteo$counts, proteo$Treatment, p.adjust.method = "fdr")
+pairwise.wilcox.test(patesci$counts, patesci$Treatment, p.adjust.method = "fdr")
+```
+
+
+# SUBSET DATA
+```{r}
+asv <- subset(heat.asv, select = -OTU_ID)
+```
+
+# HORIZON
+```{r}
+# A Horizon
+a.asv <- asv[,heat_map$Horizon=="A"] %>%
+  rmv_sngl()
+#a.asv.rarecurve <- rarecurve(t(a.asv), step = 100)
+a.asv.rare <- t(rrarefy(t(a.asv), sample = 25000))
+a.asv.rare <- data.frame(a.asv.rare) %>%
+  rmv_sngl()
+a_map <- subset(heat_map, Horizon=="A")
+
+# O Horizon
+o.asv <- asv[,heat_map$Horizon=="O"] %>%
+  rmv_sngl()
+#o.asv.rarecurve <- rarecurve(t(o.asv), step = 100)
+o.asv.rare <- t(rrarefy(t(o.asv), sample = 30000))
+o.asv.rare <- data.frame(o.asv.rare) %>%
+  rmv_sngl()
+o_map <- subset(heat_map, Horizon=="O")
+```
+# VIROME
+```{r}
+# Bulk DNA
+b.asv <- asv[,heat_map$Virome=="Bulk"] %>%
+  rmv_sngl()
+#b.asv.rarecurve <- rarecurve(t(b.asv), step = 100)
+b.asv.rare <- t(rrarefy(t(b.asv), sample = 28000))
+b.asv.rare <- data.frame(b.asv.rare) %>%
+  rmv_sngl()
+b_map <- subset(heat_map, Virome=="Bulk")
+
+# Virome
+v.asv <- asv[,heat_map$Virome=="Virome"] %>%
+  rmv_sngl()
+#v.asv.rarecurve <- rarecurve(t(v.asv), step = 100)
+v.asv.rare <- t(rrarefy(t(v.asv), sample = 30000))
+v.asv.rare <- data.frame(v.asv.rare) %>%
+  rmv_sngl()
+v_map <- subset(heat_map, Virome=="Virome")
+```
+# HORIZON & VIROME
+```{r}
+# A Horizon & Total DNA
+ab.asv <- asv[,heat_map$Horizon=="A"&heat_map$Sample=="Total"] %>%
+  rmv_sngl()
+#ab.asv.rarecurve <- rarecurve(t(ab.asv), step = 100)
+ab.asv.rare <- t(rrarefy(t(ab.asv), sample = 28000))
+ab.asv.rare <- data.frame(ab.asv.rare) %>%
+  rmv_sngl()
+ab_map <- subset(heat_map, Horizon=="A"&heat_map$Sample=="Total")
+
+# O Horizon & Total DNA
+ob.asv <- asv[,heat_map$Horizon=="O"&heat_map$Sample=="Total"] %>%
+  rmv_sngl()
+#ob.asv.rarecurve <- rarecurve(t(ob.asv), step = 100)
+ob.asv.rare <- t(rrarefy(t(ob.asv), sample = 32000))
+ob.asv.rare <- data.frame(ob.asv.rare) %>%
+  rmv_sngl()
+ob_map <- subset(heat_map, Horizon=="O"&heat_map$Sample=="Total")
+
+# A Horizon & Virome
+av.asv <- asv[,heat_map$Horizon=="A"&heat_map$Sample=="Virome"] %>%
+  rmv_sngl()
+# av.asv.rarecurve <- rarecurve(t(av.asv), step = 100)
+av.asv.rare <- t(rrarefy(t(av.asv), sample = 48000))
+av.asv.rare <- data.frame(av.asv.rare) %>%
+  rmv_sngl()
+av_map <- subset(heat_map, Horizon=="A"&heat_map$Sample=="Virome")
+
+# O Horizon & Virome
+ov.asv <- asv[,heat_map$Horizon=="O"&heat_map$Sample=="Virome"] %>%
+  rmv_sngl()
+# ov.asv.rarecurve <- rarecurve(t(ov.asv), step = 100)
+ov.asv.rare <- t(rrarefy(t(ov.asv), sample = 32000))
+ov.asv.rare <- data.frame(ov.asv.rare) %>%
+  rmv_sngl()
+ov_map <- subset(heat_map, Horizon=="O"&heat_map$Sample=="Virome")
+```
+
+#PCoA
+#Entire Dataset
+```{r}
+#rarefy
+#asv.rarecurve <- rarecurve(t(asv), step = 100)
+#based on curves, choose sample size to rarefy to
+asv.rare <- t(rrarefy(t(asv), sample = 25000))
+asv.rare <- data.frame(asv.rare) %>%
+  rmv_sngl()
+#bray-curtis dissimilarity distance matrix 
+asv.dist=vegdist(t(asv.rare), method = "bray")
+asv.pcoa <- pcoa(asv.dist)
+asv.pcoa.points <- pcoa.points(asv.pcoa)
+asv.map <- pcoa.map(asv.pcoa.points, heat_map)
+variance(asv.pcoa, 1)
+variance(asv.pcoa, 2)
+pcoa.plot.temp(asv.map, x_col = pcoa1, y_col = pcoa2, color_col= Temp, shape_col = Virome, x_label = "35.23% Variance Explained", y_label = "21.11% Variance Explained", title = "All 16S rRNA ASV Profile", filename = "all_heat_ASV_pcoa_temp.png")
+pcoa.plot.horizon(asv.map, x_col = pcoa1, y_col = pcoa2, color_col= Horizon, shape_col = Sample, x_label = "35.28% Variance Explained", y_label = "21.11% Variance Explained", title = "All 16S rRNA ASV Profile", filename = "all_heat_ASV_pcoa_horizon.pdf")
+
+# run statistics
+adonis(asv.dist
+~asv.map$'Horizon')
+adonis(asv.dist
+~asv.map$'Sample')
+adonis(asv.dist
+~asv.map$'Temp')
+```
+# A Horizon
+```{r}
+#bray-curtis dissimilarity distance matrix 
+a.asv.dist=vegdist(t(a.asv.rare), method = "bray")
+a.asv.pcoa <- pcoa(a.asv.dist)
+a.asv.pcoa.points <- pcoa.points(a.asv.pcoa)
+a.asv.map <- pcoa.map(a.asv.pcoa.points, heat_map)
+variance(a.asv.pcoa, 1)
+variance(a.asv.pcoa, 2)
+pcoa.plot.temp(a.asv.map, x_col = pcoa1, y_col = pcoa2, color_col= Treatment, shape_col = Sample, x_label = "39.49% Variance Explained", y_label = "22.55% Variance Explained", title = "A Horizon 16S rRNA ASV Profile", filename = "a_heat_ASV_pcoa_temp.pdf")
+
+adonis(a.asv.dist
+~a.asv.map$'Temp')
+# p = 0.001
+```
+# O Horizon
+```{r}
+o.asv.dist=vegdist(t(o.asv.rare), method = "bray")
+o.asv.pcoa <- pcoa(o.asv.dist)
+o.asv.pcoa.points <- pcoa.points(o.asv.pcoa)
+o.asv.map <- pcoa.map(o.asv.pcoa.points, heat_map)
+variance(o.asv.pcoa, 1)
+variance(o.asv.pcoa, 2)
+pcoa.plot.temp(o.asv.map, x_col = pcoa1, y_col = pcoa2, color_col= Treatment, shape_col = Sample, x_label = "56.22% Variance Explained", y_label = "13.81% Variance Explained", title = "O Horizon 16S rRNA ASV Profile", filename = "o_heat_ASV_pcoa_temp.pdf")
+adonis(o.asv.dist
+~o.asv.map$'Temp')
+# p = 0.05
+```
+# Horizon + Sample Type
+```{r}
+ab.asv.dist=vegdist(t(ab.asv.rare), method = "bray")
+ab.asv.pcoa <- pcoa(ab.asv.dist)
+ab.asv.pcoa.points <- pcoa.points(ab.asv.pcoa)
+ab.asv.map <- pcoa.map(ab.asv.pcoa.points, heat_map)
+variance(ab.asv.pcoa, 1)
+variance(ab.asv.pcoa, 2)
+pcoa.plot.temp(ab.asv.map, x_col = pcoa1, y_col = pcoa2, color_col= Treatment, shape_col = NULL, x_label = "44.50% Variance Explained", y_label = "9.41% Variance Explained", title = "A Horizon, Bulk Soil, 16S rRNA ASV Profile", filename = "ab_heat_ASV_pcoa_temp.pdf")
+
+adonis(ab.asv.dist
+~ab.asv.map$'Temp')
+# p = 0.001
+
+ob.asv.dist=vegdist(t(ob.asv.rare), method = "bray")
+ob.asv.pcoa <- pcoa(ob.asv.dist)
+ob.asv.pcoa.points <- pcoa.points(ob.asv.pcoa)
+ob.asv.map <- pcoa.map(ob.asv.pcoa.points, heat_map)
+variance(ob.asv.pcoa, 1)
+variance(ob.asv.pcoa, 2)
+pcoa.plot.temp(ob.asv.map, x_col = pcoa1, y_col = pcoa2, color_col= Treatment, shape_col = NULL, x_label = "37.61% Variance Explained", y_label = "13.64% Variance Explained", title = "O Horizon, Bulk Soil, 16S rRNA ASV Profile", filename = "ob_heat_ASV_pcoa_temp.pdf")
+
+adonis(ob.asv.dist
+~ob.asv.map$'Temp')
+
+av.asv.dist=vegdist(t(av.asv.rare), method = "bray")
+av.asv.pcoa <- pcoa(av.asv.dist)
+av.asv.pcoa.points <- pcoa.points(av.asv.pcoa)
+av.asv.map <- pcoa.map(av.asv.pcoa.points, heat_map)
+variance(av.asv.pcoa, 1)
+variance(av.asv.pcoa, 2)
+pcoa.plot.temp(av.asv.map, x_col = pcoa1, y_col = pcoa2, color_col= Treatment, shape_col = NULL, x_label = "65.14% Variance Explained", y_label = "13.75% Variance Explained", title = "A Horizon, Virome, 16S rRNA ASV Profile", filename = "av_heat_ASV_pcoa_temp.pdf")
+
+adonis(av.asv.dist
+~av.asv.map$'Temp')
+
+ov.asv.dist=vegdist(t(ov.asv.rare), method = "bray")
+ov.asv.pcoa <- pcoa(ov.asv.dist)
+ov.asv.pcoa.points <- pcoa.points(ov.asv.pcoa)
+ov.asv.map <- pcoa.map(ov.asv.pcoa.points, heat_map)
+variance(ov.asv.pcoa, 1)
+variance(ov.asv.pcoa, 2)
+pcoa.plot.temp(ov.asv.map, x_col = pcoa1, y_col = pcoa2, color_col= Treatment, shape_col = NULL, x_label = "58.41% Variance Explained", y_label = "13.83% Variance Explained", title = "O Horizon, Virome, 16S rRNA ASV Profile", filename = "ov_heat_ASV_pcoa_temp.pdf")
+
+adonis(ov.asv.dist
+~ov.asv.map$'Temp')
+
+```
+
+
+# RICHNESS
+```{r}
+# transpose asv table
+t.asv <- t(asv.rare)
+
+# create richness data frame by calculating presence-absence
+richness <- specnumber(t.asv)
+richness
+
+# add richness data to metadata data frame
+richness_map <- heat_map
+richness_map$Richness <- richness
+
+# STATS ???
+shapiro.test(richness_map$Richness)
+model <- aov(Richness ~ Virome, data = richness_map)
+summary(model)
+qqnorm(model$residuals)
+richness_map %>% kruskal.test(Richness~Temp)
+
+# plot richness
+richness_map %>%
+  ggplot(aes(x = factor(Temp, level = temp_order), y = Richness, fill = factor(Horizon, level = horizon_order))) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_point(position=position_jitterdodge(0.01)) +
+  xlab("Temperature (°C)") +
+  ylab("Richness (ASVs)") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 20)) +
+  theme(legend.position = "right") +
+  theme(legend.text = element_text(size = 20)) +
+  theme(legend.title = element_text(size = 20)) +
+  theme(legend.key.size = unit(0.35, 'in')) +
+  theme(axis.text = element_text(size = 16)) +
+  scale_fill_manual(name = "Horizon", 
+                    values = horizon_colors)+
+  facet_wrap(~ Virome) +
+  theme(strip.text.x = element_text(size = 20))
+
+  ggsave("Heat_asv_richness.png", width = 10, height = 5, units = "in", dpi = 500)
+```
+# UPSET PLOT
+# A horizon
+```{r}
+map <- a_map
+
+viromemap <- map %>%
+  filter(Virome=="Virome")
+bulkmap <- map %>%
+  filter(Virome=="Bulk")
+
+a.asv.upset <- a.asv.rare
+all(rowSums(a.asv.rare) > 0)
+
+virome <- a.asv.upset[,colnames(a.asv.upset)%in%viromemap$ID]
+bulk <- a.asv.upset[,colnames(a.asv.upset)%in%bulkmap$ID]
+
+virome_pa <- rowSums(virome)>0  
+bulk_pa <- rowSums(bulk) >0
+a.upsetdata <- data.frame(virome=virome_pa, bulk=bulk_pa)
+
+upset(data = a.upsetdata, intersect = c("virome","bulk") ,
+      name=NULL,
+      min_size = 0,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      stripes=upset_stripes(colors=c('grey40', 'lightgrey'))) +
+    labs(title = "ASV presence in A Horizon by Sample Type")
+ggsave("a_asv_upset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+# O horizon
+```{r}
+map <- o_map
+
+viromemap <- map %>%
+  filter(Virome=="Virome")
+bulkmap <- map %>%
+  filter(Virome=="Bulk")
+
+o.asv.upset <- o.asv.rare
+
+virome <- o.asv.upset[,colnames(o.asv.upset)%in%viromemap$ID]
+bulk <- o.asv.upset[,colnames(o.asv.upset)%in%bulkmap$ID]
+
+virome_pa <- rowSums(virome)>0  
+bulk_pa <- rowSums(bulk) >0
+o.upsetdata <- data.frame(virome=virome_pa, bulk=bulk_pa)
+
+upset(data = o.upsetdata, intersect = c("virome","bulk") ,
+      name=NULL,
+      min_size = 0,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      stripes=upset_stripes(colors=c('grey40', 'lightgrey'))) +
+    labs(title = "ASV presence in O Horizon by Sample Type")
+ggsave("o_asv_upset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+# Virome
+```{r}
+map <- v_map
+
+amap <- map %>%
+  filter(Horizon=="A")
+omap <- map %>%
+  filter(Horizon=="O")
+
+v.upset <- v.asv.rare
+
+a_horizon <- v.upset[,colnames(v.upset)%in%amap$ID]
+o_horizon <- v.upset[,colnames(v.upset)%in%omap$ID]
+
+a_horizon_pa <- rowSums(a_horizon)>0  
+o_horizon_pa <- rowSums(o_horizon) >0
+v.upsetdata <- data.frame(a_horizon=a_horizon_pa, o_horizon=o_horizon_pa)
+
+upset(data = v.upsetdata, intersect = c("a_horizon","o_horizon") ,
+      name=NULL,
+      min_size = 0,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      stripes=upset_stripes(colors=c('darkorange', 'brown'))) +
+    labs(title = "ASV presence in Virome Samples by Horizon")
+ggsave("v_asv_upset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+# Bulk DNA
+```{r}
+map <- b_map
+
+amap <- map %>%
+  filter(Horizon=="A")
+omap <- map %>%
+  filter(Horizon=="O")
+
+b.upset <- b.asv.rare
+
+a_horizon <- b.upset[,colnames(b.upset)%in%amap$ID]
+o_horizon <- b.upset[,colnames(b.upset)%in%omap$ID]
+
+a_horizon_pa <- rowSums(a_horizon)>0  
+o_horizon_pa <- rowSums(o_horizon) >0
+b.upsetdata <- data.frame(a_horizon=a_horizon_pa, o_horizon=o_horizon_pa)
+
+upset(data = b.upsetdata, intersect = c("a_horizon","o_horizon") ,
+      name=NULL,
+      min_size = 0,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      stripes=upset_stripes(colors=c('darkorange', 'brown'))) +
+    labs(title = "ASV presence in Bulk Samples by Horizon")
+ggsave("b_asv_upset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+# A Virome
+```{r}
+# upset plot for A horizon, Virome
+map <- av_map
+
+controlmap <- map %>%
+  filter(Temp=="Control")
+tenmap <- map %>%
+  filter(Temp=="10C")
+thirtymap <- map %>%
+  filter(Temp=="30C")
+sixtymap <- map %>%
+  filter(Temp=="60C")
+ninetymap <- map %>%
+  filter(Temp=="90C")
+
+av.upset <- av.asv.rare
+
+control <- av.upset[,colnames(av.upset)%in%controlmap$ID]
+ten <- av.upset[,colnames(av.upset)%in%tenmap$ID]
+thirty <- av.upset[,colnames(av.upset)%in%thirtymap$ID]
+sixty <- av.upset[,colnames(av.upset)%in%sixtymap$ID]
+ninety <- av.upset[,colnames(av.upset)%in%ninetymap$ID]
+
+control_pa <- rowSums(control)>0  
+ten_pa <- rowSums(ten) >0
+thirty_pa <- rowSums(thirty) >0
+sixty_pa <- rowSums(sixty) >0
+ninety_pa <- rowSums(ninety) >0
+av.upsetdata <- data.frame(control=control_pa, ten=ten_pa, thirty=thirty_pa, sixty=sixty_pa, ninety=ninety_pa)
+
+upset(data = av.upsetdata, intersect = c("ninety", "sixty","thirty", "ten", "control") ,
+      name=NULL,
+      min_size = 1,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      stripes=upset_stripes(colors=c('red', 'darkorange', 'gold','royalblue', 'lightblue'))) +
+    labs(title = "ASV presence in A horizon, Virome Samples by Temperature")
+
+ggsave("av_asv_upset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+# O Virome
+```{r}
+# upset plot for O horizon, Virome
+map <- ov_map
+
+controlmap <- map %>%
+  filter(Temp=="Control")
+tenmap <- map %>%
+  filter(Temp=="10C")
+thirtymap <- map %>%
+  filter(Temp=="30C")
+sixtymap <- map %>%
+  filter(Temp=="60C")
+ninetymap <- map %>%
+  filter(Temp=="90C")
+
+ov.upset <- ov.asv.rare
+
+control <- ov.upset[,colnames(ov.upset)%in%controlmap$ID]
+ten <- ov.upset[,colnames(ov.upset)%in%tenmap$ID]
+thirty <- ov.upset[,colnames(ov.upset)%in%thirtymap$ID]
+sixty <- ov.upset[,colnames(ov.upset)%in%sixtymap$ID]
+ninety <- ov.upset[,colnames(ov.upset)%in%ninetymap$ID]
+
+control_pa <- rowSums(control)>0  
+ten_pa <- rowSums(ten) >0
+thirty_pa <- rowSums(thirty) >0
+sixty_pa <- rowSums(sixty) >0
+ninety_pa <- rowSums(ninety) >0
+ov.upsetdata <- data.frame(control=control_pa, ten=ten_pa, thirty=thirty_pa, sixty=sixty_pa, ninety=ninety_pa)
+
+upset(data = ov.upsetdata, intersect = c("ninety", "sixty","thirty", "ten", "control") ,
+      name=NULL,
+      min_size = 1,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      stripes=upset_stripes(colors=c('red', 'darkorange', 'gold','royalblue', 'lightblue'))) +
+    labs(title = "ASV presence in O horizon, Virome Samples by Temperature")
+
+ggsave("ov_asv_upset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+# A bulk 
+```{r}
+# upset plot for A horizon, Bulk
+map <- ab_map
+
+controlmap <- map %>%
+  filter(Temp=="Control")
+tenmap <- map %>%
+  filter(Temp=="10C")
+thirtymap <- map %>%
+  filter(Temp=="30C")
+sixtymap <- map %>%
+  filter(Temp=="60C")
+ninetymap <- map %>%
+  filter(Temp=="90C")
+
+ab.upset <- ab.asv.rare
+
+control <- ab.upset[,colnames(ab.upset)%in%controlmap$ID]
+ten <- ab.upset[,colnames(ab.upset)%in%tenmap$ID]
+thirty <- ab.upset[,colnames(ab.upset)%in%thirtymap$ID]
+sixty <- ab.upset[,colnames(ab.upset)%in%sixtymap$ID]
+ninety <- ab.upset[,colnames(ab.upset)%in%ninetymap$ID]
+
+control_pa <- rowSums(control)>0  
+ten_pa <- rowSums(ten) >0
+thirty_pa <- rowSums(thirty) >0
+sixty_pa <- rowSums(sixty) >0
+ninety_pa <- rowSums(ninety) >0
+ab.upsetdata <- data.frame(control=control_pa, ten=ten_pa, thirty=thirty_pa, sixty=sixty_pa, ninety=ninety_pa)
+
+upset(data = ab.upsetdata, intersect = c("ninety", "sixty","thirty", "ten", "control") ,
+      name=NULL,
+      min_size = 1,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      stripes=upset_stripes(colors=c('red', 'darkorange', 'gold','royalblue', 'lightblue'))) +
+    labs(title = "ASV presence in A horizon, Bulk Samples by Temperature")
+
+ggsave("ab_asv_upset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+# O Bulk 
+```{r}
+# upset plot for O horizon, Bulk
+map <- ob_map
+
+controlmap <- map %>%
+  filter(Temp=="Control")
+tenmap <- map %>%
+  filter(Temp=="10C")
+thirtymap <- map %>%
+  filter(Temp=="30C")
+sixtymap <- map %>%
+  filter(Temp=="60C")
+ninetymap <- map %>%
+  filter(Temp=="90C")
+
+ob.upset <- ob.asv.rare
+
+control <- ob.upset[,colnames(ob.upset)%in%controlmap$ID]
+ten <- ob.upset[,colnames(ob.upset)%in%tenmap$ID]
+thirty <- ob.upset[,colnames(ob.upset)%in%thirtymap$ID]
+sixty <- ob.upset[,colnames(ob.upset)%in%sixtymap$ID]
+ninety <- ob.upset[,colnames(ob.upset)%in%ninetymap$ID]
+
+control_pa <- rowSums(control)>0  
+ten_pa <- rowSums(ten) >0
+thirty_pa <- rowSums(thirty) >0
+sixty_pa <- rowSums(sixty) >0
+ninety_pa <- rowSums(ninety) >0
+ob.upsetdata <- data.frame(control=control_pa, ten=ten_pa, thirty=thirty_pa, sixty=sixty_pa, ninety=ninety_pa)
+
+upset(data = ob.upsetdata, intersect = c("ninety", "sixty","thirty", "ten", "control") ,
+      name=NULL,
+      min_size = 1,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      stripes=upset_stripes(colors=c('red', 'darkorange', 'gold','royalblue', 'lightblue'))) +
+    labs(title = "ASV presence in O horizon, Bulk Samples by Temperature")
+
+ggsave("ob_asv_upset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+
+
+
+
+
+# DIFFERENTIAL ABUNDANCE
+```{r}
+ab.map.daa <- daamap(ab_map)
+ab.count <- daamatch(ab.map.daa,ab.asv.rare)
+ab.map.daa <- daasetmap(ab.map.daa)
+ab.count.clean <- daaclean(ab.count)
+#check to ensure correct order
+all(rownames(ab.map.daa) == colnames(ab.count.clean))
+ab.dds <- tempdeseq(ab.count.clean, ab.map.daa)
+ab.results <- data.frame(results(ab.dds))
+ab.90.60 <- contrast_analysis(ab.dds, "90C", "60C")
+ab.90.60.s <- ab.90.60 %>% filter(Sig=="S")
+ab.90.30 <- contrast_analysis(ab.dds, "90C", "30C")
+ab.90.30.s <- ab.90.30 %>% filter(Sig=="S")
+ab.90.10 <- contrast_analysis(ab.dds, "90C", "10C")
+ab.90.10.s <- ab.90.10 %>% filter(Sig=="S")
+ab.90.ctrl <- contrast_analysis(ab.dds, "90C", "Control")
+ab.90.ctrl.s <- ab.90.ctrl %>% filter(Sig=="S")
+ab.60.30 <- contrast_analysis(ab.dds, "60C", "30C")
+ab.60.30.s <- ab.60.30 %>% filter(Sig=="S")
+ab.60.10 <- contrast_analysis(ab.dds, "60C", "10C")
+ab.60.10.s <- ab.60.10 %>% filter(Sig=="S")
+ab.60.ctrl <- contrast_analysis(ab.dds, "60C", "Control")
+ab.60.ctrl.s <- ab.60.ctrl %>% filter(Sig=="S")
+ab.30.10 <- contrast_analysis(ab.dds, "30C", "10C")
+ab.30.10.s <- ab.30.10 %>% filter(Sig=="S")
+ab.30.ctrl <- contrast_analysis(ab.dds, "30C", "Control")
+ab.30.ctrl.s <- ab.30.ctrl %>% filter(Sig=="S")
+ab.10.ctrl <- contrast_analysis(ab.dds, "10C", "Control")
+ab.10.ctrl.s <- ab.10.ctrl %>% filter(Sig=="S")
+ab.dds.all <- rbind(ab.10.ctrl, ab.30.10, ab.30.ctrl, ab.60.10, ab.60.30, ab.60.ctrl, ab.90.10, ab.90.30, ab.90.ctrl, ab.90.60)
+ab.dds.bon <- padjbon(ab.dds.all)
+ab.dds.bon.s <- sigbon(ab.dds.bon)
+#get the number of unique differentially abundant OTUs
+ab.dds.bon.s$OTU %>% unique() %>% length() #44
+# create dataframe that just has unique OTUs that are significant
+ab.dds.uniq <- ab.dds.bon.s %>% distinct(OTU, .keep_all = FALSE)
+ab.asv.avg <- avgreps(ab.asv, ab_map)
+ab.asv.avg.s <- avgsig(ab.asv.avg, ab.dds.uniq)
+ab.data.scale2 <- datascale(ab.asv.avg.s)
+# calculate Z-score
+ab.data.plots <- ab.data.scale2 %>%
+  rownames_to_column(var='OTU') %>%
+  pivot_longer(-OTU, names_to='Temp', values_to = 'Zscore')
+kmeansclust(ab.data.scale2)
+fviz_nbclust(ab.data.scale2, kmeans, method = "silhouette", k.max = 24) + theme_minimal() + ggtitle("The Silhouette Plot")
+# determine which number k cluster to choose
+k <- 2
+ab.plotz <- clusters(ab.data.scale2, ab.data.plots)
+ab.plotz$Trend[ab.plotz$Trend == 1] <- 3
+ab.plotz$Trend[ab.plotz$Trend == 2] <- 1
+ab.plotz$Trend[ab.plotz$Trend == 3] <- 2
+ab.clusterplotz <- plotclusters(ab.plotz, title = "A horizon, Bulk DNA", filename = "ab_clusterplotz.png")
+ab.plotz.uniq <- clustmember(ab.plotz, subgroup = "AB")
+ab.clupset <- clustupset(ab.plotz.uniq)
+```
+
+```{r}
+ob.map.daa <- daamap(ob_map)
+ob.count <- daamatch(ob.map.daa,ob.asv.rare)
+ob.map.daa <- daasetmap(ob.map.daa)
+ob.count.clean <- daaclean(ob.count)
+#check to ensure correct order
+all(rownames(ob.map.daa) == colnames(ob.count.clean))
+ob.dds <- tempdeseq(ob.count.clean, ob.map.daa)
+ob.results <- data.frame(results(ob.dds))
+ob.90.60 <- contrast_analysis(ob.dds, "90C", "60C")
+ob.90.60.s <- ob.90.60 %>% filter(Sig=="S")
+ob.90.30 <- contrast_analysis(ob.dds, "90C", "30C")
+ob.90.30.s <- ob.90.30 %>% filter(Sig=="S")
+ob.90.10 <- contrast_analysis(ob.dds, "90C", "10C")
+ob.90.10.s <- ob.90.10 %>% filter(Sig=="S")
+ob.90.ctrl <- contrast_analysis(ob.dds, "90C", "Control")
+ob.90.ctrl.s <- ob.90.ctrl %>% filter(Sig=="S")
+ob.60.30 <- contrast_analysis(ob.dds, "60C", "30C")
+ob.60.30.s <- ob.60.30 %>% filter(Sig=="S")
+ob.60.10 <- contrast_analysis(ob.dds, "60C", "10C")
+ob.60.10.s <- ob.60.10 %>% filter(Sig=="S")
+ob.60.ctrl <- contrast_analysis(ob.dds, "60C", "Control")
+ob.60.ctrl.s <- ob.60.ctrl %>% filter(Sig=="S")
+ob.30.10 <- contrast_analysis(ob.dds, "30C", "10C")
+ob.30.10.s <- ob.30.10 %>% filter(Sig=="S")
+ob.30.ctrl <- contrast_analysis(ob.dds, "30C", "Control")
+ob.30.ctrl.s <- ob.30.ctrl %>% filter(Sig=="S")
+ob.10.ctrl <- contrast_analysis(ob.dds, "10C", "Control")
+ob.10.ctrl.s <- ob.10.ctrl %>% filter(Sig=="S")
+ob.dds.all <- rbind(ob.10.ctrl, ob.30.10, ob.30.ctrl, ob.60.10, ob.60.30, ob.60.ctrl, ob.90.10, ob.90.30, ob.90.ctrl, ob.90.60)
+ob.dds.bon <- padjbon(ob.dds.all)
+ob.dds.bon.s <- sigbon(ob.dds.bon)
+#get the number of unique differentially abundant OTUs
+ob.dds.bon.s$OTU %>% unique() %>% length() #70
+# create dataframe that just has unique OTUs that are significant
+ob.dds.uniq <- ob.dds.bon.s %>% distinct(OTU, .keep_all = FALSE)
+ob.asv.avg <- avgreps(ob.asv, ob_map)
+ob.asv.avg.s <- avgsig(ob.asv.avg, ob.dds.uniq)
+ob.data.scale2 <- datascale(ob.asv.avg.s)
+# calculate Z-score
+ob.data.plots <- ob.data.scale2 %>%
+  rownames_to_column(var='OTU') %>%
+  pivot_longer(-OTU, names_to='Temp', values_to = 'Zscore')
+kmeansclust(ob.data.scale2)
+fviz_nbclust(ob.data.scale2, kmeans, method = "silhouette", k.max = 24) + theme_minimal() + ggtitle("The Silhouette Plot")
+# determine which number k cluster to choose
+k <- 2
+ob.plotz <- clusters(ob.data.scale2, ob.data.plots)
+ob.plotz$Trend[ob.plotz$Trend == 1] <- 3
+ob.plotz$Trend[ob.plotz$Trend == 2] <- 1
+ob.plotz$Trend[ob.plotz$Trend == 3] <- 2
+ob.clusterplotz <- plotclusters(ob.plotz, title = "O horizon, Bulk DNA", filename = "ob_clusterplotz.png")
+ob.plotz.uniq <- clustmember(ob.plotz, subgroup = "OB")
+ob.clupset <- clustupset(ob.plotz.uniq)
+```
+
+```{r}
+b.clupset <- merge(ab.clupset, ob.clupset, all = TRUE)
+b.clupset[is.na(b.clupset)] <- FALSE
+ab.ob.dds.all <- clustpresent2(ab.dds.all, ob.dds.all)
+# Check all cluster OTUs are present in all subgroups
+all_OTUs_present <- all(b.clupset$OTU %in% ab.ob.dds.all$OTU)
+print(all_OTUs_present)
+# if FALSE, identify vOTUs that aren't present and then remove
+b.all.clupset <- b.clupset %>%
+  inner_join(ab.ob.dds.all, by = "OTU")
+upset(data = b.all.clupset, intersect = c("2_AB", "2_OB", "1_AB", "1_OB") ,
+      name = NULL, min_size = 0, width_ratio = 0.125, sort_sets=FALSE,
+      stripes=upset_stripes(colors=cluster_colors_upset_x2)) +
+    labs(title = "ASV Membership in Trend Groups of Bulk DNA Samples")
+ggsave("b.all.clupset.png", width = 14, height = 5, units = "in", dpi = 500)
+```
+
