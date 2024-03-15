@@ -1,7 +1,7 @@
 # README for Soil Heating Study
 
-This repository contains all the processed data and code used for Geonczy et al., Virome responses to heating treatments suggest that most temperate viral particles in a forest soil do not persist at 90°C 
+Code in this repository was used to generate figures for Geonczy et al., proposed title: "Virome responses to heating treatments suggest that most temperate viral particles in a forest soil do not persist at 90°C" 
 
-Publication: none yet
+Publication: planned for submission
 
-NCBI SRA: 
+NCBI SRA: work in progress
