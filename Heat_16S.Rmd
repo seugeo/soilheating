@@ -146,13 +146,25 @@ cor.test(actino$counts, actino$TempNum,
          method = c("pearson"),
          exact = NULL, conf.level = 0.95)
          
+patesci <- heat.phylum.map %>%
+  filter(Phylum == "Patescibacteria")
+
+FIRE032 <- heat.phylum.map %>%
+  filter(ID == "FIRE032")
+
+sum(FIRE032$counts)
+
+FIRE055 <- heat.phylum.map %>%
+  filter(ID == "FIRE055")
+
+sum(FIRE055$counts)
 
 phylumID <- ggplot(heat.phylum.map, aes(x=ID, y=counts, fill=Phylum))+
     labs(x="Sample ID", 
        y ="Counts",
        title = "Heating 16S rRNA ASV Profile by Sample")+
   geom_bar(stat="identity", position = "fill")+
-  scale_fill_manual(values=phylum_palette) +
+  scale_fill_manual(values=phylum_colors) +
   theme_bw()+
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
@@ -168,6 +180,7 @@ ob_tax_heat <- left_join(ob.asv.rare, tax_filtered, by = "OTU_ID")
 # make sure heat.asv is in the same order as tax_heat (return = TRUE)
 check_column <- "OTU_ID"
 all(ob.asv.rare[[check_column]] == ob_tax_heat[[check_column]])
+
 # pivot table and group by Phylum
 ob_tax_heat.long <- pivot_longer(ob_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
 ob.heat.phylum.long <- group_by(ob_tax_heat.long, Phylum, ID) %>%
@@ -195,6 +208,20 @@ ob.heat.phylum.map <- ob.heat.phylum.map %>%
 
 
 ob.heat.phylum.map$TreatRep <- factor(ob.heat.phylum.map$TreatRep, levels = unique(ob.heat.phylum.map$TreatRep))
+
+# Calculating Percentages
+percentage_ob <- ob.heat.phylum.map %>%
+  group_by(ID) %>%
+  mutate(Phylum_Percentage = counts / sum(counts) * 100)
+
+percentage_bacteriodota <- percentage_ob %>%
+  filter(Phylum == "Bacteroidota") %>%
+  group_by(TempGroup) %>%
+  summarise(avg_percent = mean(Phylum_Percentage, na.rm = TRUE))
+percentage_patescibacteria <- percentage_ob %>%
+  filter(NewPhylum == "Patescibacteria") %>%
+  group_by(TempGroup) %>%
+  summarise(avg_percent = mean(Phylum_Percentage, na.rm = TRUE))
 
 # Plot
 OBphylumID <- ggplot(ob.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
@@ -299,6 +326,16 @@ ov.heat.phylum.map <- ov.heat.phylum.map %>%
 
 ov.heat.phylum.map$TreatRep <- factor(ov.heat.phylum.map$TreatRep, levels = unique(ov.heat.phylum.map$TreatRep))
 
+# Calculating Percentages
+percentage_ov <- ov.heat.phylum.map %>%
+  group_by(ID) %>%
+  mutate(Phylum_Percentage = counts / sum(counts) * 100)
+
+percentage_patescibacteria <- percentage_ov %>%
+  filter(NewPhylum == "Patescibacteria") %>%
+  group_by(TempGroup) %>%
+  summarise(avg_percent = mean(Phylum_Percentage, na.rm = TRUE))
+
 # Plot
 OVphylumID <- ggplot(ov.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
     labs(x="Sample ID", 
@@ -348,6 +385,16 @@ av.heat.phylum.map <- av.heat.phylum.map %>%
   mutate(TreatRep = paste(Treatment, Replicate))
 
 av.heat.phylum.map$TreatRep <- factor(av.heat.phylum.map$TreatRep, levels = unique(av.heat.phylum.map$TreatRep))
+
+# Calculating Percentages
+percentage_av <- av.heat.phylum.map %>%
+  group_by(ID) %>%
+  mutate(Phylum_Percentage = counts / sum(counts) * 100)
+
+percentage_patescibacteria <- percentage_av %>%
+  filter(NewPhylum == "Patescibacteria") %>%
+  group_by(TempGroup) %>%
+  summarise(avg_percent = mean(Phylum_Percentage, na.rm = TRUE))
 
 # Plot
 AVphylumID <- ggplot(av.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+

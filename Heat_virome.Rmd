@@ -18,6 +18,8 @@ library(gridExtra)
 library(cowplot)
 library(ComplexUpset)
 
+# MAKE SURE TO LOAD ALL GENERAL FUNCTIONS FROM Heat_GeneralFunctions.Rmd
+
 # SET WORKING DIRECTORY
 setwd("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures")
 
@@ -546,6 +548,7 @@ fviz_nbclust(ad.data.scale2, kmeans, method = "silhouette", k.max = 24) + theme_
 k <- 2
 ad.plotz <- clusterz(ad.data.scale2, ad.data.plots)
 ad.clusterplotz <- plotclusters(ad.plotz, title = "A horizon, DNase", filename = "ad_clusterplotz.pdf")
+ad.clusterviolin <- violinclusters(ad.plotz, title = "A horizon, DNase", filename = "ad_clusterviolin.pdf")
 ad.plotz.uniq <- clustmember(ad.plotz, subgroup = "AD")
 ad.clupset <- clustupset(ad.plotz.uniq)
 ```
@@ -592,6 +595,7 @@ fviz_nbclust(od.data.scale2, kmeans, method = "silhouette", k.max = 24) + theme_
 k <- 2
 od.plotz <- clusterz(od.data.scale2, od.data.plots)
 od.clusterplotz <- plotclusters(od.plotz, title = "O horizon, DNase", filename = "od_clusterplotz.pdf")
+od.clusterviolin <- violinclusters(od.plotz, title = "O horizon, DNase", filename = "od_clusterviolin.pdf")
 od.plotz.uniq <- clustmember(od.plotz, subgroup = "OD")
 od.clupset <- clustupset(od.plotz.uniq)
 ```

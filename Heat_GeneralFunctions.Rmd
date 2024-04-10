@@ -265,6 +265,23 @@ if(!is.null(filename)) {
     ggsave(filename, plot = clusterplotz, device = "pdf", width = 200, height = 150, units = "mm", dpi = 500)}
 return(clusterplotz)}
 
+# Plot cluster trends with a violin plot
+violinclusters <- function(data.plotz, title = "Title", filename = NULL){
+clusterviolin <- data.plotz %>% 
+  ggplot(aes(x = factor(Treatment, level=temp_order), y = Zscore, fill = Trend)) +
+  geom_violin(alpha = 0.5) +
+  #geom_jitter(position = position_jitter(seed = 1, width = 0.02))+
+  geom_line(data = . %>% group_by(Trend, Treatment) %>% summarise(CMeanZS = mean(Zscore)), aes(y = CMeanZS, group = Trend), color = "black", linewidth = 1) +
+  facet_wrap(~ Trend, ncol = 1) +
+  labs(title, x ="Treatment", y= "OTU abundance (z-score)")  +
+  theme_linedraw() +
+  scale_fill_manual(values = cluster_colors) + 
+  theme(text = element_text(size = 20),
+        legend.position = "none")
+if(!is.null(filename)) {
+    ggsave(filename, plot = clusterviolin, device = "pdf", width = 200, height = 150, units = "mm", dpi = 500, path = "C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/")}
+return(clusterviolin)}
+
 # Cluster Membership
 clustmember <- function(data.plotz, subgroup = "subgroup"){
 data.plotz.uniq <- data.plotz %>%
