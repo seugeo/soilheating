@@ -1,7 +1,5 @@
-# README for Soil Heating Study
+Processed data and code used for Geonczy et al., "Virome responses to heating of a forest soil suggest that most dsDNA viral particles do not persist at 90°C"
 
-Code in this repository was used to generate figures for Geonczy et al., proposed title: "Virome responses to heating treatments suggest that most temperate viral particles in a forest soil do not persist at 90°C" 
+NCBI SRA: PRJNA1093237
 
-Publication: planned for submission
-
-NCBI SRA: work in progress
+Clustered vOTU database: https://zenodo.org/records/11043663
