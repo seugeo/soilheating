@@ -1,0 +1,210 @@
+---
+title: "Ch1Heat_env"
+output: html_document
+date: "2023-11-22"
+---
+
+```{r}
+# Load libraries
+library(ggdendro)
+library(tidyverse)
+library(cowplot)
+library(dplyr)
+```
+
+```{r}
+#Generate a data frame with the full names of all the variables profiled
+variables <- tribble(
+  ~Variable, ~Variable2,
+  "SoilMoisture", "Gravimetric Soil Moisture (%)",
+  "SoilpH", "1:1 Soil pH",
+  "WDRFBuffer", "WDRF Buffer pH",
+  "SolubleSalt", "1:1 Soluble Salts (mmho/cm)",
+  "OrganicMatter", "Organic Matter (% LOI)",
+  "CO2C", "Soil Respiration CO2-C (ppm C)",
+  "TotalN", "Total Nitrogen (ppm N)",
+  "OrganicN", "Organic Nitrogen (ppm N)",
+  "TotalOrganicC", "Total Organic Carbon (ppm C)",
+  "Nitrate", "Nitrate (ppm NO3-N)",
+  "Ammonium", "Ammonium (ppm NH4-N)",
+  "InorganicNitrogen", "Inorganic Nitrogen (ppm N)",
+  "TotalPhosphorus", "Total Phosphorus (ppm P)",
+  "InorganicPhosphorus", "Inorganic Phosphorus (ppm P)",
+  "OrganicPhosphorus", "Organic Phosphorus (ppm P)",
+  "Potassium", "Potassium (ppm K)",
+  "Calcium", "Calcium (ppm Ca)",
+  "Aluminum", "Aluminum (ppm Al)",
+  "Iron", "Iron (ppm Fe)",
+  "Sulfur", "Sulfur (ppm S)", 
+  "Zinc", "Zinc (ppm Zn)",
+  "Manganese", "Manganese (ppm Mn)",
+  "Copper", "Copper (ppm Cu)",
+  "Magnesium", "Magnesium (ppm Mg)",
+  "Sodium", "Sodium (ppm Na)",
+  "MAC", "Microbially Active Carbon (%MAC)",
+  "OrganicCN", "Organic C : Organic N",
+  "OrganicNInorganicN", "Organic N : Inorganic N",
+  "OrganicNRelease", "Organic Nitrogen Release (ppm N)",
+  "OrganicPRelease", "Organic Phosphorus Release (ppm P)",
+  "SoilHealthCalculation", "Soil Health Calculation",
+  "AvailableN", "Available Nitrogen (lbs N/A)",
+  "AvailableP", "Available Phosphorus (lbs P2O5/A)",
+  "AvailableK", "Available Potassium (lbs K2O/A)"
+)
+```
+
+```{r}
+# Load Data
+chem=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/Heating_Env_Metadata.csv", col_names = TRUE)
+chem <- data.frame(chem)
+rownames(chem) <- chem$SampleID
+chem <- chem[, -1]
+chem=chem %>%
+  select(-OrganicNRelease, -OrganicPRelease, -SoilHealthCalculation, -OrganicNInorganicN, -WDRFBuffer, -AvailableN, -AvailableP, -AvailableK)
+
+chem.tidy <- chem %>% 
+  mutate(Soil = row.names(.)) %>% 
+  gather(key = "Variable", value = "Value", -Soil)
+```
+
+```{r}
+# Generate a matrix of z-transformed values
+chem.mtx <- chem.tidy %>% 
+  group_by(Variable)%>%
+  mutate(zValue = (Value - mean(Value))/sd(Value))%>% 
+  select(Soil, Variable, zValue) %>% 
+  spread(key = Variable, value = zValue) %>% 
+  as.data.frame()
+row.names(chem.mtx) <- chem.mtx$Soil
+chem.mtx <- chem.mtx[,-1]
+chem.mtx <- as.matrix(chem.mtx)
+# Calculate distance
+samp.dist <- dist(chem.mtx)
+chem.dist <- dist(t(chem.mtx))
+
+# Perform hierarchical clustering
+samp.dd <- as.dendrogram(hclust(as.dist(samp.dist), method = "complete"))
+samp.ddata_x <- dendro_data(samp.dd)
+samp.labs <- label(samp.ddata_x) %>%
+  dplyr::rename("Soil" = "label") %>%
+  dplyr::rename("SoilOrder" = "x") 
+new_order <- c(2, 1, 3, 4, 5, 6, 7, 8, 10, 9, 11, 12)
+samp.labs$SoilOrder <- new_order
+chem.dd <- as.dendrogram(hclust(as.dist(chem.dist), method = "complete"))
+chem.ddata_x <- dendro_data(chem.dd)
+chem.labs <- label(chem.ddata_x) %>% 
+  dplyr::rename("Variable" = "label") %>% 
+  dplyr::rename("VariableOrder" = "x")
+```
+
+Generate a master file for plotting
+```{r}
+all.nutrients <- chem.tidy %>% 
+  group_by(Variable) %>% 
+  mutate(zValue = (Value - mean(Value))/sd(Value)) %>% 
+  inner_join(samp.labs, by = "Soil") %>% 
+  inner_join(chem.labs, by = "Variable") %>% 
+  inner_join(variables, by = "Variable")%>% 
+  ungroup() #%>% 
+  #mutate(Soil2 = case_when(Soil == "JepsonTop" ~ "Jepson Mound",
+                           #Soil == "JepsonBot" ~ "Jepson Swale",
+                           #TRUE ~ as.character(Soil))) %>% 
+  #mutate(Soil2 = fct_relevel(Soil2, c("Hopland", "McLaughlin", "Jepson Mound", "Jepson Swale")))
+```
+
+Get the individual plots
+```{r}
+### Dendrogram
+v.p2 <- ggplot(segment(samp.ddata_x)) +
+  geom_segment(aes(x=x, y=y, xend=xend, yend=yend))
+samp.labs.2 <- label(samp.ddata_x) %>%
+  dplyr::rename("Soil" = "label")
+samp.labs.2$x <- new_order
+samp.labs.2$horizon <- c("A","A","A","A","A","A","O","O","O","O","O","O")
+
+   #mutate(Soil2 = case_when(Soil == "JepsonTop" ~ "Jepson Mound",
+                           #Soil == "JepsonBot" ~ "Jepson Swale",
+                           #TRUE ~ as.character(Soil))) %>% 
+  #mutate(Soil2 = fct_relevel(Soil2, c("Hopland", "McLaughlin", "Jepson Mound", "Jepson Swale")))
+v.p2
+v.dd <- v.p2 + 
+  geom_point(data=samp.labs.2,
+             aes(x=x, y=0, fill = Soil, shape = horizon), size = 7, stroke = 1) +
+  coord_flip(expand = TRUE) +
+  scale_fill_manual(values = c("gold","darkorange","red","lightblue","lightblue","lightblue", "gold", "darkorange", "red","lightblue", "lightblue", "lightblue")) + 
+  scale_shape_manual(values = c(24, 21)) +
+  theme_classic() +
+  theme(text = element_text(size = 15),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "none") +
+  scale_y_reverse() +
+  xlim(-0.5,15)
+v.dd
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/env_dendrogram.pdf", width = 100, height = 225, units = "mm", dpi = 500)
+
+
+## Heatmap
+nut.p <- all.nutrients %>% 
+  #mutate(zValue = ifelse(abs(zValue) > 2, 2*sign(zValue), zValue)) %>% 
+  ggplot(aes(reorder(Variable2, VariableOrder), reorder(Soil, SoilOrder))) +
+  geom_tile(aes(fill = zValue),size = 0.25, color = "white") +
+  scale_fill_viridis_c(name = "Concentration\n(z-score)", option = "turbo",
+                        guide = guide_colorbar(title.hjust = 1,
+                                               label.theme = element_text(size = 8, angle = 45, hjust = 1))) +
+  theme_bw() +
+  theme(text = element_text(size = 14),
+        #axis.text.y = element_text(hjust = 1),
+        #axis.text.y = element_blank(),
+        axis.text.y = element_text(hjust = 0),
+        axis.text.x = element_text(angle =45, hjust = 1),
+        axis.title = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "top") 
+nut.p
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/env_heatmap.pdf", width = 250, height = 130, units = "mm", dpi = 500)
+```
+
+```{r}
+a <- cowplot::plot_grid(v.dd + theme(legend.position = "none"), 
+                                   #labs.p, 
+                                   nut.p + theme(legend.position = "top"), 
+                                   nrow = 1, align = "h", axis = "tb", 
+                                   rel_widths = c(1,10))
+a
+ggsave("env_heatmap_ddg.png", width = 14, height = 5, units = "in", dpi = 500)
+
+```
+
+# Temperature
+```{r}
+temptime <- data.frame(
+  Heatblock = c("Control","Control","30ºC","30ºC","60ºC","60ºC","90ºC","90ºC"),
+  Horizon = c("O","A","O","A","O","A","O","A"),
+  Start = c(20.4,19,15,18,11.1,19.3,14,12.8),
+  T10 = c(14,12,26.7,27.6,53,53.6,79,77),
+  T20 = c(11,11,28.5,28.5,55.6,57.3,83,82),
+  T30 = c(11,11,29,28.8,58,57.9,84.4,83))
+
+custom_ticks <- c(10, 30, 60, 90)
+  
+library(reshape2)  
+temptime_long <- melt(temptime, id.vars = c("Heatblock", "Horizon"), value.name = "Temperature", variable.name = "Timepoint")
+
+ggplot(temptime_long, aes(x = Timepoint, y = Temperature, color = Heatblock, linetype = Horizon, group = interaction(Heatblock, Horizon)))+
+  geom_line()+
+  geom_point()+
+  scale_color_manual(values = c("royalblue", "gold", "darkorange", "red"), limits = c("Control", "30ºC", "60ºC", "90ºC"))+
+  theme_bw()+
+  theme(text = element_text(size = 20))+
+  scale_y_continuous(breaks = custom_ticks, limits = c(0,95))+
+  scale_linetype_manual(values = c("O" = "solid","A" = "dashed"), limits = c("O", "A"))+
+  geom_hline(yintercept = c(10,30,60,90), linetype = "solid", color = "black")
+
+ggsave("temptime.pdf", width = 200, height = 130, units = "mm", dpi = 500)
+
+```
+
