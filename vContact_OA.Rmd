@@ -8,6 +8,9 @@ Load libraries
 library(igraph)
 library(GGally)
 library(tidyverse)
+library(network)
+library(sna)
+
 ```
 
 Load data 
@@ -246,7 +249,6 @@ otu.tidy <- otu %>%
   pivot_longer(cols=-c(OTU_ID), names_to = "SampleID", values_to = "Abundance")
 
 ```
-
 
 # Genomes and Clusters
 ```{r}
@@ -679,7 +681,7 @@ saveRDS(pairs.master, "C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeatin
 
 ```{r}
 #Generate palette
-ntwk.palette = c(rcartocolor::carto_pal(7, "Tropic")[1:3], "gray85", rcartocolor::carto_pal(7, "Tropic")[5:7], "gray25")
+#ntwk.palette = c(rcartocolor::carto_pal(7, "Tropic")[1:3], "gray85", rcartocolor::carto_pal(7, "Tropic")[5:7], "gray25")
 
 
 #Load map
@@ -769,9 +771,9 @@ whole.ntwk.p <- whole.res %>%
   geom_point(data = filter(whole.res, Response != "NS" & !Genome %in% sub.nodes$Genome), aes(x, y, color = Response), alpha = 1, size = node.size, shape = 16) +
   geom_point(data = filter(whole.res, Response == "NS" & Genome %in% sub.nodes$Genome), aes(x, y, fill = Response), alpha = 1, size = node.size , shape = 21, color = "black", stroke = stroke.size) +
   geom_point(data = filter(whole.res, Response != "NS" & Genome %in% sub.nodes$Genome), aes(x, y, fill = Response), alpha = 1, size = node.size, shape = 21, color = "black", stroke = stroke.size) +
-  scale_fill_manual(values = c('#ceb0e9','#ceb0e9','mediumpurple3','gray90','gray90','greenyellow', 'greenyellow','limegreen'),
+  scale_fill_manual(values = c('#918ae1','#918ae1','#5A4FCF','gray90','gray90','#e16262', '#e16262','#B22222'),
                     limits = c("A_Sensitive", "O_Sensitive", "Sensitive", "NS", "Mixed", "A_Tolerant", "O_Tolerant", "Tolerant")) +
-  scale_color_manual(values = c('#ceb0e9','#ceb0e9','mediumpurple3','gray90','gray90','greenyellow', 'greenyellow','limegreen'),
+  scale_color_manual(values = c('#918ae1','#918ae1','#5A4FCF','gray90','gray90','#e16262', '#e16262','#B22222'),
                     limits = c("A_Sensitive", "O_Sensitive", "Sensitive", "NS", "Mixed", "A_Tolerant", "O_Tolerant", "Tolerant")) +
   theme(axis.text = element_blank(),
         axis.title = element_blank(),
@@ -783,7 +785,7 @@ whole.ntwk.p <- whole.res %>%
 
 whole.ntwk.p
 
-ggsave("wholentwk.pdf", width = 200, height = 175, units = "mm", dpi = 500)
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/Network/wholentwk.pdf", width = 200, height = 175, units = "mm", dpi = 500)
 
 ```
 ```{r}
@@ -800,7 +802,7 @@ subntwk.p <- sub.res %>%
   geom_point(data = filter(sub.res, Response == "NS"), aes(x, y, color = Response), alpha = 1, size = 5 , shape = 16) +
   geom_point(data = filter(sub.res, Response != "NS"), aes(x, y, color = Response), alpha = 1, size = 5, shape = 16) +
   geom_label(data = filter(sub.res, HostPhylum == "Proteobacteria"), aes(x, y), label = "P", size = 5, alpha = 0.2, shape = 1) +
-  scale_color_manual(values = c('#ceb0e9','#ceb0e9','mediumpurple3','gray90','gray90','greenyellow', 'greenyellow','limegreen'),
+  scale_color_manual(values = c('#918ae1','#918ae1','#5A4FCF','gray90','gray90','#e16262', '#e16262','#B22222'),
                     limits = c("A_Sensitive", "O_Sensitive", "Sensitive", "NS", "Mixed", "A_Tolerant", "O_Tolerant", "Tolerant")) +
   theme(axis.text = element_blank(),
         axis.title = element_blank(),
@@ -812,7 +814,7 @@ subntwk.p <- sub.res %>%
 
 subntwk.p
 
-ggsave("subntwk.pdf", width = 200, height = 175, units = "mm", dpi = 500)
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/Network/subntwk.pdf", width = 200, height = 175, units = "mm", dpi = 500)
 
 ```
 

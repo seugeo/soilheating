@@ -1,0 +1,2222 @@
+---
+title: "HeatVirus_Figures"
+output: html_document
+date: "2024-11-06"
+---
+
+# GENERAL FUNCTIONS
+```{r}
+# CUSTOM COLOR PALETTE & ORDERS
+  temp_colors <- c("lightblue", "royalblue", "gold", "orange", "red")
+  temp_order <- c('Field','Control', '30ºC', '60ºC', '90ºC')
+  temp_DNase_colors <- c("lightblue", "royalblue", "gold", "orange")
+  temp_DNase_order <- c('Field','Control', '30ºC', '60ºC')
+  horizon_colors <- c("brown", "darkorange")
+  horizon_order <- c('O','A')
+  cluster_colors <- c('#5A4FCF', "#B22222")
+  cluster_colors_upset_x2 <- c('#B22222', '#B22222', '#5A4FCF', '#5A4FCF')
+  collapsed_phylum_colors <- c("Acidobacteriota" = "#7526C3", "Actinobacteriota" = "#75d644", "Bacteroidota" = "#FAE500", "Chloroflexi" = "#2665A1", "Cyanobacteria" = "#1CFEDA", "Firmicutes" = "#2ead57", "Gemmatimonadota" = "#84530D", "Myxococcota" = "#FF942E", "Patescibacteria" = "#22CBFD", "Planctomycetota" =  "#fa4668", "Proteobacteria" = "#D78EFC", "Verrucomicrobiota" = "#FE9B95", "Other" = "darkgray")
+  phyla_order <- c("Acidobacteriota", "Actinobacteriota", "Bacteroidota", "Chloroflexi", "Cyanobacteria", "Firmicutes", "Gemmatimonadota", "Myxococcota", "Patescibacteria", "Planctomycetota", "Proteobacteria", "Verrucomicrobiota", "Other")
+  
+# CONVERT COLUMN TO ROWNAMES # make sure to put "" around col and name_values
+col_to_row <- function(data, col, name_values) {
+  # assign reference value to column
+  name_values = data[[col]]
+  # remove whatever column
+  data=data%>%
+    select(-{{col}})
+  # convert to data frame
+  data=data.frame(data)
+  # assign row names (first column) to specified name
+  row.names(data)=name_values
+return(data)}
+
+# REMOVE SINGLETONS (only appears in one sample)
+rmv_sngl <- function(data) {
+  data <- data[rowSums(data>0) >1,]
+  data <- data[, colSums(data)>0]
+return(data)}
+
+# RELATIVIZE
+relativize <- function(data) {
+  data.rel=decostand(data, method = "total", MARGIN = 2)
+return(data.rel)}
+
+# CALCULATE DISTANCE MATRIX
+distance <- function(data.rel) {
+  data.dist=vegdist(t(data.rel), method = "bray")
+return(data.dist)}
+
+# CALCULATE PCOA POINTS
+pcoa <- function(data.dist) {
+  data.pcoa=cmdscale(data.dist, eig = TRUE)
+return(data.pcoa)}
+
+# CREATE DATA FRAME WITH PCOA POINTS
+pcoa.points <- function(data.pcoa) {
+  data.pcoa.points=data.frame(data.pcoa$points)
+  colnames(data.pcoa.points)=c("pcoa1", "pcoa2")
+return(data.pcoa.points)}
+
+# JOIN METADATA AND PCOA DATA
+pcoa.map <- function(data.pcoa.points,map) {
+  data.pcoa.points$ID <- rownames(data.pcoa.points)
+  data.map=left_join(data.pcoa.points,map,by="ID")
+return(data.map)}
+
+# CALCULATE VARIANCE EXPLAINED
+variance <- function(data.pcoa, x) {
+  data.pcoa$eig[x]/sum(data.pcoa$eig)}
+
+# Differential Abundance Prep
+daaprep <- function(data.rel, data.count) {
+  #turn abundance table into logical for multiplication (if value non-zero, TRUE)
+  data.abd <- data.rel %>% mutate_if(is.numeric,as.logical)
+  #ensure contig row.name order is in correct order
+  data.abd <- data.abd[match(rownames(data.count), rownames(data.abd)),]
+  #multiply abundance by count table
+  data.count.75 <- data.count * data.abd
+return(data.count.75)}
+
+# Differential Abundance Map #load metadata and re-order 75 filtered counts by metadata order
+daamap <- function(map) {
+  map.daa <- map
+  col_names <- names(map.daa)
+  map.daa[,col_names] <- lapply(map.daa[,col_names] , factor) #change everything to factors
+return(map.daa)}
+
+# Differential Abundance Match
+daamatch <- function(map.daa, data.count.75) {
+  data.count.75 <- data.count.75[, match(map.daa$ID, colnames(data.count.75))]
+return(data.count.75)}
+
+daasetmap <- function(map.daa) {
+  rownames(map.daa) <- map.daa$ID #set rownames to be the ID column
+return(map.daa)}
+
+daaclean <- function(data.count.75){
+  data.count.75.1 <- data.count.75[rowSums(data.count.75)>0, ]
+  # Remove NA Values
+  data.count.75.1.clean <- na.omit(data.count.75.1)
+return(data.count.75.1.clean)}
+
+# Run DeSeq for Temp
+tempdeseq <- function(data.count.75.1.clean, map.daa){
+  dds <- DESeqDataSetFromMatrix(countData = data.count.75.1.clean,colData = map.daa,design = ~ Treatment)
+  dds$Treatment <- relevel(dds$Treatment, ref = "Field")
+  dds <- DESeqDataSetFromMatrix(countData = data.count.75.1.clean,colData = map.daa,design = ~ Treatment)
+  dds <- DESeq(dds)
+return(dds)}
+
+# Enrichment Between Two Variables
+contrast_analysis <- function(dds, temp1, temp2){
+  contrast_result <- tidy(DESeq2::results(dds, contrast=c("Treatment",temp1,temp2))) %>%
+    mutate(Sig = ifelse(p.adjusted > 0.05, "NS", "S")) %>%
+    mutate(Temp_Enrichment = case_when(p.adjusted < 0.05 & estimate > 0 ~ temp1,
+                                      p.adjusted < 0.05 & estimate < 0 ~ temp2,
+                                      p.adjusted >= 0.05 ~ "NS")) %>%
+    add_column(Comparison = paste(temp1, temp2, sep = "_"))
+return(contrast_result)}
+
+# P-Value Adjustment using the Bonferroni method
+padjbon <- function(dds.all){
+  # filter for significant p-values
+  dds.bon <- dds.all %>% filter(p.value <0.05)
+  # add column that uses the bonferroni method to adjust  p-values
+  dds.bon$p.adj2 <- p.adjust(dds.bon$p.value, method = 'bonferroni')
+return(dds.bon)}
+
+# Significant Values and Column Name Adjustment
+sigbon <- function(dds.bon) {
+  dds.bon.s <- filter(dds.bon, p.adj2 < 0.05)
+  colnames(dds.bon.s)[colnames(dds.bon.s) == "gene"] <- "OTU"
+return(dds.bon.s)}
+
+# Take average among Temperature replicates
+avgreps <- function(data, map){
+data.avg <- data %>%
+  rownames_to_column("OTU") %>%
+  pivot_longer(-OTU, names_to = "ID", values_to = "Abundance")
+data.avg$Treatment <- ifelse(data.avg$ID %in% map$ID, map$Treatment[match(data.avg$ID,map$ID)], data.avg$ID)
+data.avg <- data.avg %>%
+  select(-ID) %>%
+  group_by(OTU, Treatment) %>%
+  summarize(Average = mean(Abundance)) %>%
+  ungroup() %>%
+  spread(Treatment, Average) %>%
+  column_to_rownames(var='OTU')
+return(data.avg)}
+
+# Select significantly abundant
+avgsig <- function(data.avg, dds.uniq) {
+  data.avg <- rownames_to_column(data.avg, var = "OTU")
+  data.avg.s <- semi_join(data.avg, dds.uniq, by = "OTU")
+rownames(data.avg.s) <- data.avg.s$OTU
+data.avg.s <- data.avg.s %>%
+  select(-OTU)
+return(data.avg.s)}
+
+# scale before calculating Z-score
+datascale <- function(data.avg.s){
+data.scale <- as.data.frame(scale(t(data.avg.s)))
+data.scale2 <- as.data.frame(t(data.scale))
+data.scale2 <- data.scale2[complete.cases(data.scale2),]
+return(data.scale2)}
+
+# K-means clustering
+kmeansclust <- function(data.scale2){
+km2 <- kmeans(data.scale2, 2)
+km3 <- kmeans(data.scale2, 3)
+km4 <- kmeans(data.scale2, 4)
+km5 <- kmeans(data.scale2, 5)
+km6 <- kmeans(data.scale2, 6)
+
+p1 <- fviz_cluster(km2, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 2")
+p2 <- fviz_cluster(km3, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 3")
+p3 <- fviz_cluster(km4, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 4")
+p4 <- fviz_cluster(km5, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 5")
+p5 <- fviz_cluster(km6, data = data.scale2, frame.type = "convex", labelsize = 0, alpha=0) + theme_minimal() + ggtitle("k = 6")
+plot_grid(p1, p2, p3, p4, p5, labels = c("k2", "k3", "k4", "k5", "k6"))}
+
+# Assign clusters
+clusterz <- function(data.scale2, data.plots){
+  dist <- dist(as.matrix(data.scale2)) 
+  clust <- hclust(dist, method = "average") 
+  ord.names <- clust$labels[clust$order] 
+  ord.tmp <- data.frame(OTU = ord.names, order = 1:length(ord.names))
+  cut <- cutree(clust[c(1,2,4)], k = k)
+  ord.tmp$Cluster <- as.factor(cut[ord.tmp$OTU])
+  data.plotz <- data.plots %>% 
+  inner_join(ord.tmp, by = 'OTU') %>% 
+  mutate(Trend = case_when(Cluster == 1 ~ "Heat Sensitive",
+                           Cluster == 2 ~ "Heat Tolerant"))
+return(data.plotz)}
+
+# Plot cluster trends
+plotclusters <- function(data.plotz, title = "Title", filename = NULL){
+clusterplotz <- data.plotz %>% 
+  ggplot(aes(x = factor(Treatment, level=temp_order), Zscore)) +
+  geom_jitter(aes(fill = Trend), pch =21, alpha = 0.3, size = 1.5, col = 'black', width = 0.1)+
+  geom_line(data = . %>% group_by(Trend, Treatment) %>% summarise(CMeanZS = mean(Zscore)), aes(y = CMeanZS, group = Trend), color = "gray", size = 1) +
+  facet_wrap(~ Trend, ncol = 1) +
+  labs(title, x ="Treatment", y= "OTU abundance (z-score)")  +
+  theme_linedraw() +
+  scale_fill_manual(values = cluster_colors) + 
+  theme(text = element_text(size = 20),
+        legend.position = "none")
+if(!is.null(filename)) {
+    ggsave(filename, plot = clusterplotz, device = "pdf", width = 200, height = 150, units = "mm", dpi = 500)}
+return(clusterplotz)}
+
+# Plot cluster trends with a violin plot
+violinclusters <- function(data.plotz, title = "Title", filename = NULL){
+clusterviolin <- data.plotz %>% 
+  ggplot(aes(x = factor(Treatment, level=temp_order), y = Zscore, fill = Trend)) +
+  geom_violin(alpha = 0.5) +
+  #geom_jitter(position = position_jitter(seed = 1, width = 0.02))+
+  geom_line(data = . %>% group_by(Trend, Treatment) %>% summarise(CMeanZS = mean(Zscore)), aes(y = CMeanZS, group = Trend), color = "black", linewidth = 1) +
+  facet_wrap(~ Trend, ncol = 1) +
+  labs(title, x ="Treatment", y= "OTU abundance (z-score)")  +
+  theme_linedraw() +
+  scale_fill_manual(values = cluster_colors) + 
+  theme(text = element_text(size = 20),
+        legend.position = "none")
+if(!is.null(filename)) {
+    ggsave(filename, plot = clusterviolin, device = "pdf", width = 200, height = 150, units = "mm", dpi = 500)}
+return(clusterviolin)}
+
+# Cluster Membership
+clustmember <- function(data.plotz, subgroup = "subgroup"){
+data.plotz.uniq <- data.plotz %>%
+  distinct(OTU, .keep_all = TRUE) %>%
+  select(-Treatment, -Trend, -Zscore, -order) %>%
+  mutate(subgroup)
+data.plotz.uniq <- unite(data.plotz.uniq, Cluster_subgroup, Cluster, subgroup, sep = "_")
+return(data.plotz.uniq)}
+
+# Cluster Membership Upset Prep
+clustupset <- function(data.plotz.uniq){
+data.clupset <- data.plotz.uniq %>%
+  mutate(present = TRUE) %>%
+  spread(Cluster_subgroup, present, fill = FALSE)
+return(data.clupset)}
+
+
+# Keep cluster OTUs that are present in the 2 subgroups represented
+clustpresent2 <- function(df1.dds.all, df2.dds.all) {
+  df1.OTU <- df1.dds.all
+colnames(df1.OTU)[colnames(df1.OTU) == "gene"] <- "OTU"
+df1.OTU <- df1.OTU %>%
+  distinct(OTU, .keep_all = FALSE)
+df2.OTU <- df2.dds.all
+colnames(df2.OTU)[colnames(df2.OTU) == "gene"] <- "OTU"
+df2.OTU <- df2.OTU %>%
+  distinct(OTU, .keep_all = FALSE)
+df1.df2.OTU <- inner_join(df1.OTU, df2.OTU, by = "OTU")
+return(df1.df2.OTU)}
+```
+
+# LOAD PACKAGES
+```{r}
+library(tidyverse)
+library(vegan)
+library(ComplexUpset)
+library(ggdendro)
+#install.packages("BiocManager")
+library(BiocManager)
+#BiocManager::install("DESeq2")
+library(DESeq2)
+#BiocManager::install("biobroom")
+library(biobroom)
+library(factoextra)
+library(gridExtra)
+library(cowplot)
+```
+
+# FIGURE 1  
+# 1C. Microcosm soil temperature over time
+```{r}
+temptime <- data.frame(
+  Heatblock = c("Control","Control","30ºC","30ºC","60ºC","60ºC","90ºC","90ºC"),
+  Horizon = c("O","A","O","A","O","A","O","A"),
+  "0" = c(20.4,19,15,18,11.1,19.3,14,12.8),
+  "10" = c(14,12,26.7,27.6,53,53.6,79,77),
+  "20" = c(11,11,28.5,28.5,55.6,57.3,83,82),
+  "30" = c(11,11,29,28.8,58,57.9,84.4,83))
+
+custom_ticks <- c(10, 30, 60, 90)
+  
+library(reshape2)  
+temptime_long <- melt(temptime, id.vars = c("Heatblock", "Horizon"), value.name = "Temperature", variable.name = "Time")
+
+ggplot(temptime_long, aes(x = Time, y = Temperature, fill = Heatblock, linetype = Horizon, group = interaction(Heatblock, Horizon))) +
+  geom_hline(yintercept = c(10, 30, 60, 90), linetype = "solid", color = "black") +
+  geom_line(aes(color = "black"), size = 0.75) + # Smooth lines without confidence interval
+  geom_point(size = 5, stroke = 1, shape = 21, color = "black") + # Points with black outline
+  scale_fill_manual(values = c("royalblue", "gold", "darkorange", "red"), limits = c("Control", "30ºC", "60ºC", "90ºC")) +
+  scale_color_manual(values = c("royalblue", "gold", "darkorange", "red"), limits = c("Control", "30ºC", "60ºC", "90ºC")) +
+  labs(x = "Time (min)", 
+       y = "Temperature (ºC)") +
+  theme_bw() +
+  theme(text = element_text(size = 20)) +
+  scale_y_continuous(breaks = custom_ticks, limits = c(0, 95)) +
+  scale_linetype_manual(values = c("O" = "solid", "A" = "dashed"), limits = c("O", "A"))
+
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/temptime.pdf", width = 200, height = 130, units = "mm", dpi = 500)
+```
+
+
+# FIGURE 2
+# LOAD INPUT DATA
+# vOTU relative abundance
+```{r}
+# LOAD ABUNDANCE DATA FOR ENTIRE DATASET
+otu=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/all.75.tmean.tsv", delim = "\t", col_names = TRUE)
+
+# PREP DATA FRAME
+otu <- col_to_row(otu, "Contig", "contignames")
+# edit column names 
+colnames(otu) <- gsub(pattern=".vib.sI.Trimmed.Mean", replacement = "", x=colnames(otu))
+# remove two samples that are not necessary
+otu$N1_S61_L004 <- NULL
+otu$N2_S62_L004 <- NULL
+
+# LOAD METADATA FOR ENTIRE DATASET
+metadata=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/heat_metadata.txt", delim = "\t", col_names = TRUE)
+colnames(metadata)[colnames(metadata) == "Treatment"] <- "Experiment"
+metadata <- metadata %>%
+  mutate(Treatment = case_when(
+    Temp == "Control" ~ "Field",
+    Temp == "10C" ~ "Control",
+    Temp == "30C" ~ "30ºC",
+    Temp == "60C" ~ "60ºC", 
+    Temp == "90C" ~ "90ºC")) %>%
+  mutate(TempGroup = case_when(
+    Treatment == "Field" ~ "Field/Control/30ºC", 
+    Treatment == "Control" ~ "Field/Control/30ºC", 
+    Treatment == "30ºC" ~ "Field/Control/30ºC", 
+    Treatment == "60ºC" ~ "60ºC", 
+    Treatment == "90ºC" ~ "90ºC")) %>%
+  mutate(Virome = case_when(
+    DNase == "NoDNase" ~ "NonDNase",
+    DNase == "DNase" ~ "DNase"))
+
+# LOAD COUNT TABLE
+otu.count=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/all.count.tsv", delim = "\t", col_names = TRUE)
+otu.count <- col_to_row(otu.count, "Contig", "contignames")
+colnames(otu.count) <- gsub(pattern=".vib.sI.Read.Count", replacement = "", x=colnames(otu.count))
+otu.count=otu.count%>%
+  select(-N1_S61_L004, -N2_S62_L004)
+```
+
+# 2A. PCoA all viromes (colors = soil horizon, shapes = virome type)
+```{r}
+dfname <- "otu"
+df <- get(dfname)
+otu <- rmv_sngl(df)
+otu.rel <- relativize(otu)
+colSums(otu.rel)
+otu.dist <- distance(otu.rel)
+otu.pcoa <- pcoa(otu.dist)
+otu.pcoa.points <- pcoa.points(otu.pcoa)
+otu.map <- pcoa.map(otu.pcoa.points, metadata)
+variance(otu.pcoa, 1)
+variance(otu.pcoa, 2)
+
+ggplot(otu.map, aes(x=pcoa1, y=pcoa2, fill=Horizon, color=Horizon, shape = DNase))+
+  scale_fill_manual(values=horizon_colors, limits=horizon_order) +
+  scale_color_manual(values=horizon_colors, limits=horizon_order) +
+  scale_shape_manual(values = c("DNase" = 21, "NoDNase" = 24)) +
+  geom_point(size = 6, stroke = 1, color = "black") + # Points with black outline
+  labs(x = "PCo1 (74.76% Variance Explained)", 
+       y = "PCo2 (8.73% Variance Explained)")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "bottom") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+  guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/2A.pdf", width = 125, height = 125, units = "mm", dpi = 500)
+
+# run statistics
+adonis(otu.dist
+~otu.map$'Horizon')
+adonis(otu.dist
+~otu.map$'DNase')
+adonis(otu.dist
+~otu.map$'Temp')
+adonis(a.otu.dist
+~a.otu.map$'Temp')
+adonis(o.otu.dist
+~o.otu.map$'Temp')
+```
+
+
+# 2B. UpSet plot of vOTU detection in each horizon in DNase-treated viromes
+```{r}
+d.otu <- otu[,metadata$DNase=="DNase"] %>%
+  rmv_sngl()
+d.otu.rel <- relativize(d.otu)
+colSums(d.otu.rel)
+d.map <- subset(metadata, DNase=="DNase")
+d.count <- otu.count[,metadata$DNase=="DNase"]
+d.count <- rmv_sngl(d.count)
+
+map <- d.map
+
+amap <- map %>%
+  filter(Horizon=="A")
+omap <- map %>%
+  filter(Horizon=="O")
+
+d.upset <- d.otu.rel
+
+a_horizon <- d.upset[,colnames(d.upset)%in%amap$ID]
+o_horizon <- d.upset[,colnames(d.upset)%in%omap$ID]
+
+a_horizon_pa <- rowSums(a_horizon)>0  
+o_horizon_pa <- rowSums(o_horizon) >0
+d.upsetdata <- data.frame(a_horizon=a_horizon_pa, o_horizon=o_horizon_pa)
+
+horizon_upset <- upset(data = d.upsetdata, intersect = c("a_horizon","o_horizon") ,
+      name="vOTU Presence in DNase Viromes by Horizon",
+      min_size = 0,
+      width_ratio = 0.125,
+      themes=upset_default_themes(text=element_text(size = 20)),
+      sort_sets=FALSE,
+      set_sizes=(upset_set_size()+theme(axis.text.x = element_text(angle=90))),
+      stripes=upset_stripes(colors=c('darkorange', 'brown')))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/UpSet/2B.pdf", width = 200, height = 220, units = "mm", dpi = 500)
+```
+
+
+# 2C. Hierarchical clustering / heat map of soil samples based on soil chemical data
+```{r}
+chem=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/Heating_Env_Metadata.csv", col_names = TRUE)
+chem <- data.frame(chem)
+rownames(chem) <- chem$SampleID
+chem <- chem[, -1]
+chem=chem %>%
+  select(-OrganicNRelease, -OrganicPRelease, -SoilHealthCalculation, -OrganicNInorganicN, -WDRFBuffer, -AvailableN, -AvailableP, -AvailableK)
+
+chem.tidy <- chem %>% 
+  mutate(Soil = row.names(.)) %>% 
+  gather(key = "Variable", value = "Value", -Soil)
+
+#Generate a data frame with the full names of all the variables profiled
+variables <- tribble(
+  ~Variable, ~Variable2,
+  "SoilMoisture", "Gravimetric Soil Moisture (%)",
+  "SoilpH", "1:1 Soil pH",
+  "WDRFBuffer", "WDRF Buffer pH",
+  "SolubleSalt", "1:1 Soluble Salts (mmho/cm)",
+  "OrganicMatter", "Organic Matter (% LOI)",
+  "CO2C", "Soil Respiration CO2-C (ppm C)",
+  "TotalN", "Total Nitrogen (ppm N)",
+  "OrganicN", "Organic Nitrogen (ppm N)",
+  "TotalOrganicC", "Total Organic Carbon (ppm C)",
+  "Nitrate", "Nitrate (ppm NO3-N)",
+  "Ammonium", "Ammonium (ppm NH4-N)",
+  "InorganicNitrogen", "Inorganic Nitrogen (ppm N)",
+  "TotalPhosphorus", "Total Phosphorus (ppm P)",
+  "InorganicPhosphorus", "Inorganic Phosphorus (ppm P)",
+  "OrganicPhosphorus", "Organic Phosphorus (ppm P)",
+  "Potassium", "Potassium (ppm K)",
+  "Calcium", "Calcium (ppm Ca)",
+  "Aluminum", "Aluminum (ppm Al)",
+  "Iron", "Iron (ppm Fe)",
+  "Sulfur", "Sulfur (ppm S)", 
+  "Zinc", "Zinc (ppm Zn)",
+  "Manganese", "Manganese (ppm Mn)",
+  "Copper", "Copper (ppm Cu)",
+  "Magnesium", "Magnesium (ppm Mg)",
+  "Sodium", "Sodium (ppm Na)",
+  "MAC", "Microbially Active Carbon (%MAC)",
+  "OrganicCN", "Organic C : Organic N",
+  "OrganicNInorganicN", "Organic N : Inorganic N",
+  "OrganicNRelease", "Organic Nitrogen Release (ppm N)",
+  "OrganicPRelease", "Organic Phosphorus Release (ppm P)",
+  "SoilHealthCalculation", "Soil Health Calculation",
+  "AvailableN", "Available Nitrogen (lbs N/A)",
+  "AvailableP", "Available Phosphorus (lbs P2O5/A)",
+  "AvailableK", "Available Potassium (lbs K2O/A)"
+)
+
+# Generate a matrix of z-transformed values
+chem.mtx <- chem.tidy %>% 
+  group_by(Variable)%>%
+  mutate(zValue = (Value - mean(Value))/sd(Value))%>% 
+  select(Soil, Variable, zValue) %>% 
+  spread(key = Variable, value = zValue) %>% 
+  as.data.frame()
+row.names(chem.mtx) <- chem.mtx$Soil
+chem.mtx <- chem.mtx[,-1]
+chem.mtx <- as.matrix(chem.mtx)
+# Calculate distance
+samp.dist <- dist(chem.mtx)
+chem.dist <- dist(t(chem.mtx))
+
+# Perform hierarchical clustering
+samp.dd <- as.dendrogram(hclust(as.dist(samp.dist), method = "complete"))
+samp.ddata_x <- dendro_data(samp.dd)
+samp.labs <- label(samp.ddata_x) %>%
+  dplyr::rename("Soil" = "label") %>%
+  dplyr::rename("SoilOrder" = "x") 
+new_order <- c(2, 1, 3, 4, 5, 6, 7, 8, 10, 9, 11, 12)
+samp.labs$SoilOrder <- new_order
+chem.dd <- as.dendrogram(hclust(as.dist(chem.dist), method = "complete"))
+chem.ddata_x <- dendro_data(chem.dd)
+chem.labs <- label(chem.ddata_x) %>% 
+  dplyr::rename("Variable" = "label") %>% 
+  dplyr::rename("VariableOrder" = "x")
+
+all.nutrients <- chem.tidy %>% 
+  group_by(Variable) %>% 
+  mutate(zValue = (Value - mean(Value))/sd(Value)) %>% 
+  inner_join(samp.labs, by = "Soil") %>% 
+  inner_join(chem.labs, by = "Variable") %>% 
+  inner_join(variables, by = "Variable")%>% 
+  ungroup()
+
+### Dendrogram
+v.p2 <- ggplot(segment(samp.ddata_x)) +
+  geom_segment(aes(x=x, y=y, xend=xend, yend=yend))
+samp.labs.2 <- label(samp.ddata_x) %>%
+  dplyr::rename("Soil" = "label")
+samp.labs.2$x <- new_order
+samp.labs.2$horizon <- c("A","A","A","A","A","A","O","O","O","O","O","O")
+
+v.p2
+v.dd <- v.p2 + 
+  geom_point(data=samp.labs.2,
+             aes(x=x, y=0, fill = Soil, shape = horizon), size = 7, stroke = 1.5) +
+  coord_flip(expand = TRUE) +
+  scale_fill_manual(values = c("gold","darkorange","red","lightblue","lightblue","lightblue", "gold", "darkorange", "red","lightblue", "lightblue", "lightblue")) + 
+  scale_shape_manual(values = c(24, 21)) +
+  theme_classic() +
+  theme(text = element_text(size = 15),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "none") +
+  scale_y_reverse() +
+  xlim(-0.5,15)
+v.dd
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/Heatmap/env_dendrogram.pdf", width = 100, height = 225, units = "mm", dpi = 500)
+
+## Heatmap
+nut.p <- all.nutrients %>% 
+  #mutate(zValue = ifelse(abs(zValue) > 2, 2*sign(zValue), zValue)) %>% 
+  ggplot(aes(reorder(Variable2, VariableOrder), reorder(Soil, SoilOrder))) +
+  geom_tile(aes(fill = zValue),size = 0.25, color = "white") +
+  scale_fill_viridis_c(name = "Concentration\n(z-score)", option = "turbo",
+                        guide = guide_colorbar(title.hjust = 1,
+                                               label.theme = element_text(size = 8, angle = 45, hjust = 1))) +
+  theme_bw() +
+  theme(text = element_text(size = 14),
+        #axis.text.y = element_text(hjust = 1),
+        #axis.text.y = element_blank(),
+        axis.text.y = element_text(hjust = 0),
+        axis.text.x = element_text(angle =45, hjust = 1),
+        axis.title = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "top") 
+nut.p
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/Heatmap/env_heatmap.pdf", width = 250, height = 130, units = "mm", dpi = 500)
+```
+
+
+
+# FIGURE 3
+# 3A. PCoA all viromes - O horizon (colors = treatment, shapes = virome type)
+```{r}
+# O horizon
+o.otu <- otu[,metadata$Horizon=="O"] %>%
+  rmv_sngl()
+o.otu.rel <- relativize(o.otu)
+colSums(o.otu.rel)
+o.map <- subset(metadata, Horizon=="O")
+o.count <- otu.count[,metadata$Horizon=="O"]
+o.count <- rmv_sngl(o.count)
+
+o.otu.dist <- distance(o.otu.rel)
+o.otu.pcoa <- pcoa(o.otu.dist)
+o.otu.pcoa.points <- pcoa.points(o.otu.pcoa)
+o.otu.map <- pcoa.map(o.otu.pcoa.points, o.map)
+variance(o.otu.pcoa, 1)
+variance(o.otu.pcoa, 2)
+
+ggplot(o.otu.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment, shape = Virome))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  scale_shape_manual(values = c("DNase" = 21, "NonDNase" = 24)) +
+  geom_point(size = 6, stroke = 1, color = "black") + # Points with black outline
+  labs(x = "PCo1 (53.26% Variance Explained)", 
+       y = "PCo2 (16.58% Variance Explained)",
+       title = "O Horizon")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+  guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/3A.pdf", width = 200, height = 125, units = "mm", dpi = 500)
+
+adonis(o.otu.dist
+~o.otu.map$'Treatment')
+```
+
+# 3B. PCoA all viromes - A horizon (colors = treatment, shapes = virome type)
+```{r}
+# A horizon
+a.otu <- otu[,metadata$Horizon=="A"] %>%
+  rmv_sngl()
+a.otu.rel <- relativize(a.otu)
+colSums(a.otu.rel)
+a.map <- subset(metadata, Horizon=="A")
+a.count <- otu.count[,metadata$Horizon=="A"]
+a.count <- rmv_sngl(a.count)
+
+a.otu.dist <- distance(a.otu.rel)
+a.otu.pcoa <- pcoa(a.otu.dist)
+a.otu.pcoa.points <- pcoa.points(a.otu.pcoa)
+a.otu.map <- pcoa.map(a.otu.pcoa.points, a.map)
+variance(a.otu.pcoa, 1)
+variance(a.otu.pcoa, 2)
+
+ggplot(a.otu.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment, shape = Virome))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  scale_shape_manual(values = c("DNase" = 21, "NonDNase" = 24)) +
+    geom_point(size = 6, stroke = 1, color = "black") + # Points with black outline
+  labs(x = "PCo1 (55.36% Variance Explained)", 
+       y = "PCo2 (17.80% Variance Explained)",
+       title = "A Horizon")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/3B.pdf", width = 200, height = 125, units = "mm", dpi = 500)
+
+adonis(a.otu.dist
+~a.otu.map$'Treatment')
+```
+
+# 3C. UpSet plot - DNase-treated viromes - O horizon
+```{r}
+od.otu <- otu[,metadata$Horizon=="O"&metadata$Virome=="DNase"] %>%
+  rmv_sngl()
+od.otu.rel <- relativize(od.otu)
+colSums(od.otu.rel)
+od.map <- subset(metadata, Horizon=="O"&metadata$Virome=="DNase")
+od.count <- otu.count[,metadata$Horizon=="O"&metadata$Virome=="DNase"]
+od.count <- rmv_sngl(od.count)
+
+map <- od.map
+
+fieldmap <- map %>%
+  filter(Treatment=="Field")
+controlmap <- map %>%
+  filter(Treatment=="Control")
+thirtymap <- map %>%
+  filter(Treatment=="30ºC")
+sixtymap <- map %>%
+  filter(Treatment=="60ºC")
+
+od.upset <- od.otu.rel
+
+Field <- od.upset[,colnames(od.upset)%in%fieldmap$ID]
+Control <- od.upset[,colnames(od.upset)%in%controlmap$ID]
+thirty <- od.upset[,colnames(od.upset)%in%thirtymap$ID]
+sixty <- od.upset[,colnames(od.upset)%in%sixtymap$ID]
+
+field_pa <- rowSums(Field)>0  
+control_pa <- rowSums(Control) >0
+thirty_pa <- rowSums(thirty) >0
+sixty_pa <- rowSums(sixty) >0
+od.upsetdata <- data.frame(Field=field_pa, Control=control_pa, thirty=thirty_pa, sixty=sixty_pa)
+
+upset(data = od.upsetdata, intersect = c("sixty","thirty", "Control", "Field") ,
+      name="O Horizon, DNase Viromes",
+      min_size = 100,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      themes=upset_default_themes(text=element_text(size = 20)),
+      set_sizes=(upset_set_size()+theme(axis.text.x = element_text(angle=90))),
+      stripes=upset_stripes(colors=c('darkorange', 'gold','royalblue', 'lightblue')))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/UpSet/3C.pdf", width = 230, height = 150, units = "mm", dpi = 500)
+```
+
+
+# 3D. UpSet plot - DNase-treated viromes - A horizon
+```{r}
+ad.otu <- otu[,metadata$Horizon=="A"&metadata$Virome=="DNase"] %>%
+  rmv_sngl()
+ad.otu.rel <- relativize(ad.otu)
+colSums(ad.otu.rel)
+ad.map <- subset(metadata, Horizon=="A"&metadata$Virome=="DNase")
+ad.count <- otu.count[,metadata$Horizon=="A"&metadata$Virome=="DNase"]
+ad.count <- rmv_sngl(ad.count)
+
+map <- ad.map
+
+fieldmap <- map %>%
+  filter(Treatment=="Field")
+controlmap <- map %>%
+  filter(Treatment=="Control")
+thirtymap <- map %>%
+  filter(Treatment=="30ºC")
+sixtymap <- map %>%
+  filter(Treatment=="60ºC")
+
+ad.upset <- ad.otu.rel
+
+Field <- ad.upset[,colnames(ad.upset)%in%fieldmap$ID]
+Control <- ad.upset[,colnames(ad.upset)%in%controlmap$ID]
+thirty <- ad.upset[,colnames(ad.upset)%in%thirtymap$ID]
+sixty <- ad.upset[,colnames(ad.upset)%in%sixtymap$ID]
+
+field_pa <- rowSums(Field)>0  
+control_pa <- rowSums(Control) >0
+thirty_pa <- rowSums(thirty) >0
+sixty_pa <- rowSums(sixty) >0
+ad.upsetdata <- data.frame(Field=field_pa, Control=control_pa, thirty=thirty_pa, sixty=sixty_pa)
+
+upset(data = ad.upsetdata, intersect = c("sixty","thirty", "Control", "Field") ,
+      name="A Horizon, DNase Viromes",
+      min_size = 100,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      themes=upset_default_themes(text=element_text(size = 20)),
+      set_sizes=(upset_set_size()+theme(axis.text.x = element_text(angle=90))),
+      stripes=upset_stripes(colors=c('darkorange', 'gold','royalblue', 'lightblue')))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/UpSet/3D.pdf", width = 230, height = 150, units = "mm", dpi = 500)
+```
+
+# 3E. UpSet plot - non-DNase-treated viromes - O horizon
+```{r}
+on.otu <- otu[,metadata$Horizon=="O"&metadata$Virome=="NonDNase"] %>%
+  rmv_sngl()
+on.otu.rel <- relativize(on.otu)
+colSums(on.otu.rel)
+on.map <- subset(metadata, Horizon=="O"&metadata$Virome=="NonDNase")
+on.count <- otu.count[,metadata$Horizon=="O"&metadata$Virome=="NonDNase"]
+on.count <- rmv_sngl(on.count)
+
+map <- on.map
+
+fieldmap <- map %>%
+  filter(Treatment=="Field")
+controlmap <- map %>%
+  filter(Treatment=="Control")
+thirtymap <- map %>%
+  filter(Treatment=="30ºC")
+sixtymap <- map %>%
+  filter(Treatment=="60ºC")
+ninetymap <- map %>%
+  filter(Treatment=="90ºC")
+
+on.upset <- on.otu.rel
+
+Field <- on.upset[,colnames(on.upset)%in%fieldmap$ID]
+Control <- on.upset[,colnames(on.upset)%in%controlmap$ID]
+thirty <- on.upset[,colnames(on.upset)%in%thirtymap$ID]
+sixty <- on.upset[,colnames(on.upset)%in%sixtymap$ID]
+ninety <- on.upset[,colnames(on.upset)%in%ninetymap$ID]
+
+field_pa <- rowSums(Field)>0  
+control_pa <- rowSums(Control) >0
+thirty_pa <- rowSums(thirty) >0
+sixty_pa <- rowSums(sixty) >0
+ninety_pa <- rowSums(ninety) >0
+on.upsetdata <- data.frame(Field=field_pa, Control=control_pa, thirty=thirty_pa, sixty=sixty_pa, ninety=ninety_pa)
+
+upset(data = on.upsetdata, intersect = c("ninety", "sixty","thirty", "Control", "Field") ,
+      name="O Horizon, nonDNase Viromes",
+      min_size = 100,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      themes=upset_default_themes(text=element_text(size = 20)),
+      set_sizes=(upset_set_size()+theme(axis.text.x = element_text(angle=90))),
+      stripes=upset_stripes(colors=c('red', 'darkorange', 'gold','royalblue', 'lightblue')))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/UpSet/3E.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+```
+
+# 3F. UpSet plot - non-DNase-treated viromes - A horizon
+```{r}
+an.otu <- otu[,metadata$Horizon=="A"&metadata$Virome=="NonDNase"] %>%
+  rmv_sngl()
+an.otu.rel <- relativize(an.otu)
+colSums(an.otu.rel)
+an.map <- subset(metadata, Horizon=="A"&metadata$Virome=="NonDNase")
+an.count <- otu.count[,metadata$Horizon=="A"&metadata$Virome=="NonDNase"]
+an.count <- rmv_sngl(an.count)
+
+map <- an.map
+
+fieldmap <- map %>%
+  filter(Treatment=="Field")
+controlmap <- map %>%
+  filter(Treatment=="Control")
+thirtymap <- map %>%
+  filter(Treatment=="30ºC")
+sixtymap <- map %>%
+  filter(Treatment=="60ºC")
+ninetymap <- map %>%
+  filter(Treatment=="90ºC")
+
+an.upset <- an.otu.rel
+
+Field <- an.upset[,colnames(an.upset)%in%fieldmap$ID]
+Control <- an.upset[,colnames(an.upset)%in%controlmap$ID]
+thirty <- an.upset[,colnames(an.upset)%in%thirtymap$ID]
+sixty <- an.upset[,colnames(an.upset)%in%sixtymap$ID]
+ninety <- an.upset[,colnames(an.upset)%in%ninetymap$ID]
+
+field_pa <- rowSums(Field)>0  
+control_pa <- rowSums(Control) >0
+thirty_pa <- rowSums(thirty) >0
+sixty_pa <- rowSums(sixty) >0
+ninety_pa <- rowSums(ninety) >0
+an.upsetdata <- data.frame(Field=field_pa, Control=control_pa, thirty=thirty_pa, sixty=sixty_pa, ninety=ninety_pa)
+
+upset(data = an.upsetdata, intersect = c("ninety", "sixty","thirty", "Control", "Field") ,
+      name="A Horizon, nonDNase Viromes",
+      min_size = 100,
+      width_ratio = 0.125,
+      sort_sets=FALSE,
+      themes=upset_default_themes(text=element_text(size = 20)),
+      set_sizes=(upset_set_size()+theme(axis.text.x = element_text(angle=90))),
+      stripes=upset_stripes(colors=c('red', 'darkorange', 'gold','royalblue', 'lightblue')))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/UpSet/3F.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+```
+
+# 3G. DNA yields for DNase- (left facet) and non-DNase- (right facet) treated viromes from each horizon for each treatment
+```{r}
+yields=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/DNAyield.txt", delim = "\t", col_names = TRUE)
+yields <- data.frame(yields)
+yields <- yields %>%
+  mutate(Treatment = case_when(
+    Temperature == "Control" ~ "Field",
+    Temperature == "10" ~ "Control",
+    Temperature == "30" ~ "30ºC",
+    Temperature == "60" ~ "60ºC", 
+    Temperature == "90" ~ "90ºC")) %>%
+  mutate(TempGroup = case_when(
+    Treatment == "Field" ~ "Field/Control/30ºC", 
+    Treatment == "Control" ~ "Field/Control/30ºC", 
+    Treatment == "30ºC" ~ "Field/Control/30ºC", 
+    Treatment == "60ºC" ~ "60ºC", 
+    Treatment == "90ºC" ~ "90ºC")) %>%
+  mutate(DNase = case_when(
+    DNase == "NoDNase" ~ "NonDnase",
+    DNase == "DNase" ~ "DNase"))
+
+DNAyield <- yields %>%
+  ggplot(aes(x = factor(Treatment, level=temp_order), y = DNA_g, fill = factor(Horizon, level=horizon_order))) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_point(position=position_jitterdodge()) +
+  xlab("Treatment") +
+  ylab("DNA Yield (ng/g soil)") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 20)) +
+  theme(legend.position = "right", legend.text = element_text(size=20), legend.title = element_text(size=20)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
+  scale_fill_manual(name = "Horizon", 
+                    values = horizon_colors) +
+  facet_wrap(~ DNase)
+
+DNAyield + theme(strip.text = element_text(size=20))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/BoxPlot/3G.pdf", width = 200, height = 120, units = "mm", dpi = 500)
+
+  # stats on DNA yield
+yields.stats <- yields
+yields_od <- yields.stats %>%
+  filter(Horizon == "O"&DNase == "DNase")
+kruskal.test(DNAyield ~ Treatment, yields_od)
+
+yields_ad <- yields.stats %>%
+  filter(Horizon == "A"&DNase == "DNase")
+kruskal.test(DNAyield ~ Treatment, yields_ad)
+
+yields_on <- yields.stats %>%
+  filter(Horizon == "O"&DNase == "NonDnase")
+kruskal.test(DNAyield ~ Treatment, yields_on)
+
+yields_an <- yields.stats %>%
+  filter(Horizon == "A"&DNase == "NonDnase")
+kruskal.test(DNAyield ~ Treatment, yields_an)
+```
+
+
+
+# FIGURE 4
+# 4A. Violin plot of significantly differentially abundant vOTUs based on heat treatment (DNase-treated, O horizon)
+```{r}
+od.count.75 <- daaprep(od.otu.rel, od.count)
+od.map.daa <- daamap(od.map)
+od.count.75 <- daamatch(od.map.daa,od.count.75)
+od.map.daa <- daasetmap(od.map.daa)
+od.count.75.1.clean <- daaclean(od.count.75)
+#check to ensure correct order
+all(rownames(od.map.daa) == colnames(od.count.75.1.clean))
+od.dds <- tempdeseq(od.count.75.1.clean, od.map.daa)
+od.results <- data.frame(results(od.dds))
+od.60.30 <- contrast_analysis(od.dds, "60ºC", "30ºC")
+od.60.30.s <- od.60.30 %>% filter(Sig=="S")
+od.60.C <- contrast_analysis(od.dds, "60ºC", "Control")
+od.60.C.s <- od.60.C %>% filter(Sig=="S")
+od.60.F <- contrast_analysis(od.dds, "60ºC", "Field")
+od.60.F.s <- od.60.F %>% filter(Sig=="S")
+od.30.C <- contrast_analysis(od.dds, "30ºC", "Control")
+od.30.C.s <- od.30.C %>% filter(Sig=="S")
+od.30.F <- contrast_analysis(od.dds, "30ºC", "Field")
+od.30.F.s <- od.30.F %>% filter(Sig=="S")
+od.C.F <- contrast_analysis(od.dds, "Control", "Field")
+od.C.F.s <- od.C.F %>% filter(Sig=="S")
+od.dds.all <- rbind(od.C.F, od.30.C, od.30.F, od.60.C, od.60.30, od.60.F)
+od.dds.bon <- padjbon(od.dds.all)
+od.dds.bon.s <- sigbon(od.dds.bon)
+#get the number of unique differentially abundant vOTUs
+od.dds.bon.s$OTU %>% unique() %>% length() #3219
+# create dataframe that just has unique vOTUs that are significant
+od.dds.uniq <- od.dds.bon.s %>% distinct(OTU, .keep_all = FALSE)
+od.otu.avg <- avgreps(od.otu, od.map)
+od.otu.avg.s <- avgsig(od.otu.avg, od.dds.uniq)
+od.data.scale2 <- datascale(od.otu.avg.s)
+# calculate Z-score
+od.data.plots <- od.data.scale2 %>%
+  rownames_to_column(var='OTU') %>%
+  pivot_longer(-OTU, names_to='Treatment', values_to = 'Zscore')
+kmeansclust(od.data.scale2)
+fviz_nbclust(od.data.scale2, kmeans, method = "silhouette", k.max = 24) + theme_minimal() + ggtitle("The Silhouette Plot")
+# determine which number k cluster to choose
+k <- 2
+od.plotz <- clusterz(od.data.scale2, od.data.plots)
+od.clusterplotz <- plotclusters(od.plotz, title = "O horizon, DNase", filename = "C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/TrendGroups/od_clusterplotz.pdf")
+od.clusterviolin <- violinclusters(od.plotz, title = "O horizon, DNase", filename = "C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/TrendGroups/4A.pdf")
+od.plotz.uniq <- clustmember(od.plotz, subgroup = "OD")
+od.clupset <- clustupset(od.plotz.uniq)
+```
+
+# 4B. Violin plot of significantly differentially abundant vOTUs based on heat treatment (DNase-treated, A horizon)
+```{r}
+ad.count.75 <- daaprep(ad.otu.rel, ad.count)
+ad.map.daa <- daamap(ad.map)
+ad.count.75 <- daamatch(ad.map.daa,ad.count.75)
+ad.map.daa <- daasetmap(ad.map.daa)
+ad.count.75.1.clean <- daaclean(ad.count.75)
+#check to ensure correct order
+all(rownames(ad.map.daa) == colnames(ad.count.75.1.clean))
+ad.dds <- tempdeseq(ad.count.75.1.clean, ad.map.daa)
+ad.results <- data.frame(results(ad.dds))
+ad.60.30 <- contrast_analysis(ad.dds, "60ºC", "30ºC")
+ad.60.30.s <- ad.60.30 %>% filter(Sig=="S")
+ad.60.C <- contrast_analysis(ad.dds, "60ºC", "Control")
+ad.60.C.s <- ad.60.C %>% filter(Sig=="S")
+ad.60.F <- contrast_analysis(ad.dds, "60ºC", "Field")
+ad.60.F.s <- ad.60.F %>% filter(Sig=="S")
+ad.30.C <- contrast_analysis(ad.dds, "30ºC", "Control")
+ad.30.C.s <- ad.30.C %>% filter(Sig=="S")
+ad.30.F <- contrast_analysis(ad.dds, "30ºC", "Field")
+ad.30.F.s <- ad.30.F %>% filter(Sig=="S")
+ad.C.F <- contrast_analysis(ad.dds, "Control", "Field")
+ad.C.F.s <- ad.C.F %>% filter(Sig=="S")
+ad.dds.all <- rbind(ad.C.F, ad.30.C, ad.30.F, ad.60.C, ad.60.30, ad.60.F)
+ad.dds.bon <- padjbon(ad.dds.all)
+ad.dds.bon.s <- sigbon(ad.dds.bon)
+#get the number of unique differentially abundant vOTUs
+ad.dds.bon.s$OTU %>% unique() %>% length() #2755
+# create dataframe that just has unique vOTUs that are significant
+ad.dds.uniq <- ad.dds.bon.s %>% distinct(OTU, .keep_all = FALSE)
+ad.otu.avg <- avgreps(ad.otu, ad.map)
+ad.otu.avg.s <- avgsig(ad.otu.avg, ad.dds.uniq)
+ad.data.scale2 <- datascale(ad.otu.avg.s)
+# calculate Z-score
+ad.data.plots <- ad.data.scale2 %>%
+  rownames_to_column(var='OTU') %>%
+  pivot_longer(-OTU, names_to='Treatment', values_to = 'Zscore')
+kmeansclust(ad.data.scale2)
+fviz_nbclust(ad.data.scale2, kmeans, method = "silhouette", k.max = 24) + theme_minimal() + ggtitle("The Silhouette Plot")
+# determine which number k cluster to choose
+k <- 2
+ad.plotz <- clusterz(ad.data.scale2, ad.data.plots)
+ad.clusterplotz <- plotclusters(ad.plotz, title = "A horizon, DNase", filename = "ad_clusterplotz.pdf")
+ad.clusterviolin <- violinclusters(ad.plotz, title = "A horizon, DNase", filename = "C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/TrendGroups/4B.pdf")
+ad.plotz.uniq <- clustmember(ad.plotz, subgroup = "AD")
+ad.clupset <- clustupset(ad.plotz.uniq)
+```
+
+# 4C. UpSet plot of differentially abundant vOTUs in DNase-treated viromes
+```{r}
+d.clupset <- merge(ad.clupset, od.clupset, all = TRUE)
+d.clupset[is.na(d.clupset)] <- FALSE
+ad.od.dds.all <- clustpresent2(ad.dds.all, od.dds.all)
+# Check all cluster vOTUs are present in all subgroups
+all_vOTUs_present <- all(d.clupset$OTU %in% ad.od.dds.all$OTU)
+print(all_vOTUs_present)
+# if FALSE, identify vOTUs that aren't present and then remove
+d.all.clupset <- d.clupset %>%
+  inner_join(ad.od.dds.all, by = "OTU")
+d.all.clupset <- d.all.clupset %>%
+  dplyr::rename(
+    "Tolerant_A" = "2_AD",
+    "Tolerant_O" = "2_OD",
+    "Sensitive_A" = "1_AD",
+    "Sensitive_O" = "1_OD")
+upset(data = d.all.clupset, intersect = c("Tolerant_A", "Tolerant_O", "Sensitive_A", "Sensitive_O") ,
+      name = "Heat Tolerant or Heat Sensitive Groups", 
+      min_size = 0, width_ratio = 0.125, sort_sets=FALSE,
+      set_sizes=(upset_set_size()+theme(axis.text.x = element_text(angle=90))),
+      themes=upset_default_themes(text=element_text(size = 20)),
+      stripes=upset_stripes(colors=cluster_colors_upset_x2)) 
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/TrendGroups/4C.pdf", width = 220, height = 140, units = "mm", dpi = 500)
+```
+# 4D. Gene-sharing network 
+```{r}
+# Filtering for Contigs that are in a trend group (tolerant or sensitive)
+
+d.all.clupset <- read.csv("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/rmd/heat_trendgroups.csv")
+d.all.clupset <- select(d.all.clupset, -X)
+
+Tolerant_A <- "Tolerant_A"
+Tolerant_O <- "Tolerant_O"
+Sensitive_A <- "Sensitive_A"
+Sensitive_O <- "Sensitive_O"
+
+A_Heat_Tolerant <- d.all.clupset[d.all.clupset[[Tolerant_A]] & !d.all.clupset[[Tolerant_O]], ]
+A_Heat_Tolerant <- A_Heat_Tolerant %>% mutate(TrendGroup = "A_Tolerant")
+O_Heat_Tolerant <- d.all.clupset[d.all.clupset[[Tolerant_O]] & !d.all.clupset[[Tolerant_A]], ]
+O_Heat_Tolerant <- O_Heat_Tolerant %>% mutate(TrendGroup = "O_Tolerant")
+AO_Heat_Tolerant <- d.all.clupset[d.all.clupset[[Tolerant_O]] & d.all.clupset[[Tolerant_A]], ]
+AO_Heat_Tolerant <- AO_Heat_Tolerant %>% mutate(TrendGroup = "AO_Tolerant")
+
+A_Heat_Sensitive <- d.all.clupset[d.all.clupset[[Sensitive_A]] & !d.all.clupset[[Sensitive_O]], ]
+A_Heat_Sensitive <- A_Heat_Sensitive %>% mutate(TrendGroup = "A_Sensitive")
+O_Heat_Sensitive <- d.all.clupset[d.all.clupset[[Sensitive_O]] & !d.all.clupset[[Sensitive_A]], ]
+O_Heat_Sensitive <- O_Heat_Sensitive %>% mutate(TrendGroup = "O_Sensitive")
+AO_Heat_Sensitive <- d.all.clupset[d.all.clupset[[Sensitive_O]] & d.all.clupset[[Sensitive_A]], ]
+AO_Heat_Sensitive <- AO_Heat_Sensitive %>% mutate(TrendGroup = "AO_Sensitive")
+
+TrendGroup_Contigs <- rbind(A_Heat_Tolerant, O_Heat_Tolerant, AO_Heat_Tolerant, A_Heat_Sensitive, O_Heat_Sensitive, AO_Heat_Sensitive)
+TrendGroup_Contigs <- subset(TrendGroup_Contigs, select = -c(Sensitive_A, Sensitive_O, Tolerant_A, Tolerant_O))
+
+saveRDS(TrendGroup_Contigs, "C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/rds/trendgroup_contigs.RDS")
+
+# vcontact prepping of indicator vOTUs data frame
+od.stats <- od.dds.bon %>%
+  dplyr::rename(
+    "Genome" = "gene")
+od.stats <- od.stats %>%
+  select("Genome", "statistic", "p.adj2")
+
+od.plotz.statz <- od.plotz.uniq %>%
+  dplyr::rename(
+    "Genome" = "OTU")
+
+o_indicators <- merge(od.plotz.statz, od.stats, by = "Genome", all = TRUE)
+
+o_indicators <- o_indicators %>%
+  mutate(Cluster_subgroup = ifelse(is.na(Cluster_subgroup), "NS", Cluster_subgroup))
+o_indicators <- o_indicators %>%
+  mutate(O_Response = case_when(
+    Cluster_subgroup == "1_OD" ~ "O_Sensitive",
+    Cluster_subgroup == "2_OD" ~ "O_Tolerant", 
+    Cluster_subgroup == "NS" ~ "NS"))
+o_indicators <- o_indicators %>%
+  select(-Cluster_subgroup)
+
+ad.stats <- ad.dds.bon %>%
+  dplyr::rename(
+    "Genome" = "gene")
+ad.stats <- ad.stats %>%
+  select("Genome", "statistic", "p.adj2")
+
+ad.plotz.statz <- ad.plotz.uniq %>%
+  dplyr::rename(
+    "Genome" = "OTU")
+
+a_indicators <- merge(ad.plotz.statz, ad.stats, by = "Genome", all = TRUE)
+a_indicators <- a_indicators %>%
+  mutate(Cluster_subgroup = ifelse(is.na(Cluster_subgroup), "NS", Cluster_subgroup))
+a_indicators <- a_indicators %>%
+  mutate(A_Response = case_when(
+    Cluster_subgroup == "1_AD" ~ "A_Sensitive",
+    Cluster_subgroup == "2_AD" ~ "A_Tolerant", 
+    Cluster_subgroup == "NS" ~ "NS"))
+a_indicators <- a_indicators %>%
+  select(-Cluster_subgroup)
+
+a_o_indicators <- merge(a_indicators, o_indicators, by = "Genome", all = TRUE)
+a_o_indicators <- a_o_indicators[complete.cases(a_o_indicators), ]
+a_o_indicators <- a_o_indicators %>%
+  mutate(Response = case_when(
+    O_Response == "O_Sensitive" & A_Response == "A_Sensitive" ~ "Sensitive",
+    O_Response == "O_Tolerant" & A_Response == "A_Tolerant" ~ "Tolerant",
+    O_Response == "O_Sensitive" & A_Response == "A_Tolerant" ~ "Mixed",
+    O_Response == "O_Tolerant" & A_Response == "A_Sensitive" ~ "Mixed",
+    O_Response == "O_Tolerant" & A_Response == "NS" ~ "O_Tolerant",
+    O_Response == "O_Sensitive" & A_Response == "NS" ~ "O_Sensitive",
+    O_Response == "NS" & A_Response == "A_Tolerant" ~ "A_Tolerant",
+    O_Response == "NS" & A_Response == "A_Sensitive" ~ "A_Sensitive",
+    O_Response == "NS" & A_Response == "NS" ~ "NS"))
+
+saveRDS(a_o_indicators, "C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/a_o_indicators.RDS")
+# To make plot, refer to vContact_OA.Rmd
+```
+# 4E. Gene-sharing subnetwork
+```{r}
+# To make plot, refer to vContact_OA.Rmd
+```
+
+# Figure 5
+# Load input data
+```{r}
+# LOAD & CLEAN TAXONOMY DATA
+tax_all <- readRDS("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/rds/tax_all.RDS")
+# Change NAs in taxonomy to "unknown"
+tax_all$Family[is.na(tax_all$Family)] <- "Unknown Family"
+tax_all$Order <- factor(tax_all$Order, levels = c(levels(tax_all$Order), "Unknown Order"))
+tax_all$Order[is.na(tax_all$Order)] <- "Unknown Order"
+# remove mitochondria and chloroplast
+criteria <- !(tax_all$Family == "Mitochondria" | tax_all$Order == "Chloroplast")
+tax_filtered <- tax_all[criteria, ]
+
+# LOAD & CLEAN ABUNDANCE DATA
+asv_all <- readRDS("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/rds/asv_all.RDS")
+asv_all <- as.data.frame(asv_all)
+asv_all$OTU_ID <- rownames(asv_all)
+# make sure that asv_all is in the same order as tax_all by OTU_ID (return = TRUE)
+check_column <- "OTU_ID"
+all(asv_all[[check_column]] == tax_all[[check_column]])
+rownames(asv_all) <- NULL
+#remove ASVs that were assigned Mitochondria or Chloroplast
+asv_filtered <- asv_all[!(tax_all$Family=="Mitochondria"),]
+tax_no_mitochondria <- tax_all[!(tax_all$Family=="Mitochondria"),]
+asv_filtered <- asv_filtered[!(tax_no_mitochondria$Order=="Chloroplast"),]
+
+# SELECT FOR HEATING EXPERIMENT DATASET
+#load heat mapping data
+all_map=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/16S_ID.txt", delim = "\t", col_names = TRUE)
+#change SampleID to ID
+colnames(all_map)[colnames(all_map) == "SampleID"] <- "ID"
+#subset heating 16S data
+heat.asv <- asv_filtered[,all_map$Experiment=="Heat"]
+heat.asv <- subset(heat.asv, select = -c(FIRE061, FIRE060))
+
+# PREP ABUNDANCE DATA
+#do some other things to prep data frame
+rownames(heat.asv) <- heat.asv$OTU_ID
+heat.asv$OTU_ID <- NULL
+# remove rows with just zeroes (24,270)
+heat.asv <- heat.asv[rowSums(heat.asv>0) >0,]
+# remove singletons (6,860) 
+heat.asv <- rmv_sngl(heat.asv)
+heat.asv$OTU_ID <- rownames(heat.asv)
+ASVs_filtered <- row.names(heat.asv)
+
+#load mapping data to subset within heating dataset 
+heat_map=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/heat16S_metadata.txt", delim = "\t", col_names = TRUE)
+colnames(heat_map)[colnames(heat_map) == "SampleID"] <- "ID"
+heat_map <- subset(heat_map, ID !="FIRE061")
+heat_map <- subset(heat_map, ID !="FIRE060")
+heat_map$Virome[heat_map$Virome == "yes"] <- "Virome"
+heat_map$Virome[heat_map$Virome == "no"] <- "Bulk"
+write.table(x=heat_map, file = "16SHeat_Metadata.tsv", quote=FALSE, sep="\t")
+heat_map=read_delim("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/heat16S_mapwrep.txt", delim = "\t", col_names = TRUE)
+heat_map <- heat_map %>%
+  mutate(Treatment = case_when(
+    Temp == "Control" ~ "Field",
+    Temp == "10C" ~ "Control",
+    Temp == "30C" ~ "30ºC",
+    Temp == "60C" ~ "60ºC", 
+    Temp == "90C" ~ "90ºC")) %>%
+  mutate(TempGroup = case_when(
+    Treatment == "Field" ~ "Field/Control/30ºC", 
+    Treatment == "Control" ~ "Field/Control/30ºC", 
+    Treatment == "30ºC" ~ "Field/Control/30ºC", 
+    Treatment == "60ºC" ~ "60ºC", 
+    Treatment == "90ºC" ~ "90ºC")) %>%
+  mutate(Sample = case_when(
+    Virome == "Bulk" ~ "Total",
+    Virome == "Virome" ~ "Virome"))
+
+asv <- subset(heat.asv, select = -OTU_ID)
+```
+
+# 5A. PCoA all ASVs - O horizon (color = treatment, shape = sample type) 
+```{r}
+o.asv <- asv[,heat_map$Horizon=="O"] %>%
+  rmv_sngl()
+#o.asv.rarecurve <- rarecurve(t(o.asv), step = 100)
+set.seed(24)
+o.asv.rare <- t(rrarefy(t(o.asv), sample = 30000))
+o.asv.rare <- data.frame(o.asv.rare) %>%
+  rmv_sngl()
+o_map <- subset(heat_map, Horizon=="O")
+
+o.asv.dist=vegdist(t(o.asv.rare), method = "bray")
+o.asv.pcoa <- pcoa(o.asv.dist)
+o.asv.pcoa.points <- pcoa.points(o.asv.pcoa)
+o.asv.map <- pcoa.map(o.asv.pcoa.points, heat_map)
+variance(o.asv.pcoa, 1)
+variance(o.asv.pcoa, 2)
+
+ggplot(o.asv.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment, shape = Sample))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  scale_shape_manual(values = c("Total" = 21, "Virome" = 24)) +
+    geom_point(size = 6, stroke = 1, color = "black") + # Points with black outline
+  labs(x = "PCo1 (56.14% Variance Explained)", 
+       y = "PCo2 (13.87% Variance Explained)",
+       title = "O Horizon - Prokaryotes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/5A.pdf", width = 180, height = 125, units = "mm", dpi = 500)
+
+adonis(o.asv.dist
+~o.asv.map$'Temp')
+# p = 0.05
+```
+
+
+# 5B. PCoA all ASVs - A horizon (color = treatment, shape = sample type) 
+```{r}
+# A Horizon
+a.asv <- asv[,heat_map$Horizon=="A"] %>%
+  rmv_sngl()
+#a.asv.rarecurve <- rarecurve(t(a.asv), step = 100)
+set.seed(24)
+a.asv.rare <- t(rrarefy(t(a.asv), sample = 25000))
+a.asv.rare <- data.frame(a.asv.rare) %>%
+  rmv_sngl()
+a_map <- subset(heat_map, Horizon=="A")
+
+#bray-curtis dissimilarity distance matrix 
+a.asv.dist=vegdist(t(a.asv.rare), method = "bray")
+a.asv.pcoa <- pcoa(a.asv.dist)
+a.asv.pcoa.points <- pcoa.points(a.asv.pcoa)
+a.asv.map <- pcoa.map(a.asv.pcoa.points, heat_map)
+variance(a.asv.pcoa, 1)
+variance(a.asv.pcoa, 2)
+
+ggplot(a.asv.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment, shape = Sample))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  scale_shape_manual(values = c("Total" = 21, "Virome" = 24)) +
+    geom_point(size = 6, stroke = 1, color = "black") + # Points with black outline
+  labs(x = "PCo1 (39.60% Variance Explained)", 
+       y = "PCo2 (22.67% Variance Explained)",
+       title = "A Horizon - Prokaryotes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/5B.pdf", width = 180, height = 125, units = "mm", dpi = 500)
+
+adonis(a.asv.dist
+~a.asv.map$'Temp')
+# p = 0.001
+```
+
+# 5C. Stacked bar plot - Phylum-level ASVs (total DNA,  O horizon) 
+```{r}
+# O Horizon & Total DNA
+ob.asv <- asv[,heat_map$Horizon=="O"&heat_map$Sample=="Total"] %>%
+  rmv_sngl()
+#ob.asv.rarecurve <- rarecurve(t(ob.asv), step = 100)
+set.seed(24)
+ob.asv.rare <- t(rrarefy(t(ob.asv), sample = 32000))
+ob.asv.rare <- data.frame(ob.asv.rare) %>%
+  rmv_sngl()
+ob_map <- subset(heat_map, Horizon=="O"&heat_map$Sample=="Total")
+
+# SUBSET BY O HORIZON (only bulk data)
+ob.asv.rare$OTU_ID <- rownames(ob.asv.rare)
+
+# Join taxonomy and abundance data together
+ob_tax_heat <- left_join(ob.asv.rare, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(ob.asv.rare[[check_column]] == ob_tax_heat[[check_column]])
+
+# pivot table and group by Phylum
+ob_tax_heat.long <- pivot_longer(ob_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
+ob.heat.phylum.long <- group_by(ob_tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# rarefied to 32,000
+# collapse phyla into "other" category if represents less than 1%, which is 320
+ob.heat.phylum.long$Phylum <- as.character(ob.heat.phylum.long$Phylum)
+
+ob.heat.phylum.long <- ob.heat.phylum.long %>%
+  group_by(Phylum) %>%
+  mutate(NewPhylum = ifelse(all(counts < 320), 'Other', Phylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+ob.heat.phylum.map <- merge(ob.heat.phylum.long, ob_map, by="ID")
+ob.heat.phylum.map <- ob.heat.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+ob.heat.phylum.map$TreatRep <- factor(ob.heat.phylum.map$TreatRep, levels = unique(ob.heat.phylum.map$TreatRep))
+
+# Calculating Percentages
+percentage_ob <- ob.heat.phylum.map %>%
+  group_by(ID) %>%
+  mutate(Phylum_Percentage = counts / sum(counts) * 100)
+
+percentage_bacteriodota <- percentage_ob %>%
+  filter(Phylum == "Bacteroidota") %>%
+  group_by(TempGroup) %>%
+  summarise(avg_percent = mean(Phylum_Percentage, na.rm = TRUE))
+percentage_patescibacteria <- percentage_ob %>%
+  filter(NewPhylum == "Patescibacteria") %>%
+  group_by(TempGroup) %>%
+  summarise(avg_percent = mean(Phylum_Percentage, na.rm = TRUE))
+
+# Plot
+OBphylumID <- ggplot(ob.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
+    labs(x="Sample ID", 
+       y ="Relative Abundance",
+       title = "16S rRNA ASV Profile by Sample (O, Total DNA)")+
+  geom_bar(stat="identity", position = "fill")+
+  geom_vline(xintercept = c(3.5, 6.5, 9.5, 12.5), linetype = "solid", color = "black", size = 1)+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "none")
+
+OBphylumID <- ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/StackedBarPlot/OBID_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+
+# Statistics
+acido_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Acidobacteriota")
+actino_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota")
+bact_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Bacteroidota")
+firm_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Firmicutes")
+myxo_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Myxococcota")
+plancto_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Planctomycetota")
+proteo_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Proteobacteria")
+verru_ob <- ob.heat.phylum.map %>%
+  filter(Phylum == "Verrucomicrobiota")
+
+kruskal.test(counts ~ Treatment, acido_ob)
+kruskal.test(counts ~ TempGroup, acido_ob)
+
+kruskal.test(counts ~ Treatment, actino_ob)
+kruskal.test(counts ~ TempGroup, actino_ob)
+
+kruskal.test(counts ~ Treatment, bact_ob)
+kruskal.test(counts ~ TempGroup, bact_ob)
+
+kruskal.test(counts ~ Treatment, firm_ob)
+kruskal.test(counts ~ TempGroup, firm_ob)
+
+kruskal.test(counts ~ Treatment, myxo_ob)
+kruskal.test(counts ~ TempGroup, myxo_ob)
+
+kruskal.test(counts ~ Treatment, plancto_ob)
+kruskal.test(counts ~ TempGroup, plancto_ob)
+
+kruskal.test(counts ~ Treatment, proteo_ob)
+kruskal.test(counts ~ TempGroup, proteo_ob)
+
+kruskal.test(counts ~ Treatment, verru_ob)
+kruskal.test(counts ~ TempGroup, verru_ob)
+
+ggplot(firm_ob, aes(x=Treatment, y=counts, color = Treatment))+
+         geom_boxplot()
+
+ggplot(firm_ob, aes(x=TempGroup, y=counts, color = TempGroup))+
+         geom_boxplot()
+
+ggplot(myxo_ob, aes(x=Treatment, y=counts, color = Treatment))+
+         geom_boxplot()
+```
+
+# 5D. Stacked bar plot - Phylum-level ASVs (total DNA,  A horizon) 
+```{r}
+# A Horizon & Total DNA
+ab.asv <- asv[,heat_map$Horizon=="A"&heat_map$Sample=="Total"] %>%
+  rmv_sngl()
+#ab.asv.rarecurve <- rarecurve(t(ab.asv), step = 100)
+ab.asv.rare <- t(rrarefy(t(ab.asv), sample = 28000))
+ab.asv.rare <- data.frame(ab.asv.rare) %>%
+  rmv_sngl()
+ab_map <- subset(heat_map, Horizon=="A"&heat_map$Sample=="Total")
+
+ab.asv.rare$OTU_ID <- rownames(ab.asv.rare)
+
+# Join taxonomy and abundance data together
+ab_tax_heat <- left_join(ab.asv.rare, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(ab.asv.rare[[check_column]] == ab_tax_heat[[check_column]])
+# pivot table and group by Phylum
+ab_tax_heat.long <- pivot_longer(ab_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
+ab.heat.phylum.long <- group_by(ab_tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# rarefied to 28,000
+# collapse phyla into "other" category if represents less than 1%, which is 280
+ab.heat.phylum.long$Phylum <- as.character(ab.heat.phylum.long$Phylum)
+
+ab.heat.phylum.long <- ab.heat.phylum.long %>%
+  group_by(Phylum) %>%
+  mutate(NewPhylum = ifelse(all(counts <280), 'Other', Phylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+ab.heat.phylum.map <- merge(ab.heat.phylum.long, ab_map, by="ID")
+ab.heat.phylum.map <- ab.heat.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+
+ab.heat.phylum.map$TreatRep <- factor(ab.heat.phylum.map$TreatRep, levels = unique(ab.heat.phylum.map$TreatRep))
+
+# Plot
+ABphylumID <- ggplot(ab.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
+    labs(x="Sample ID", 
+       y ="Relative Abundance",
+       title = "16S rRNA ASV Profile by Sample (A, Total DNA)")+
+  geom_bar(stat="identity", position = "fill")+
+  geom_vline(xintercept = c(3.5, 6.5, 9.5, 12.5), linetype = "solid", color = "black", size = 1)+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")
+
+ABphylumID <- ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/StackedBarPlot/ABID_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+
+# Statistics
+acido_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Acidobacteriota")
+actino_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota")
+bact_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Bacteroidota")
+chloro_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Chloroflexi")
+firm_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Firmicutes")
+gemma_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Gemmatimonadota")
+myxo_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Myxococcota")
+plancto_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Planctomycetota")
+proteo_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Proteobacteria")
+verru_ab <- ab.heat.phylum.map %>%
+  filter(Phylum == "Verrucomicrobiota")
+
+kruskal.test(counts ~ Treatment, acido_ab)
+kruskal.test(counts ~ Treatment, actino_ab)
+kruskal.test(counts ~ Treatment, bact_ab)
+kruskal.test(counts ~ Treatment, chloro_ab)
+kruskal.test(counts ~ Treatment, firm_ab)
+kruskal.test(counts ~ Treatment, gemma_ab)
+kruskal.test(counts ~ Treatment, myxo_ab)
+kruskal.test(counts ~ Treatment, plancto_ab)
+kruskal.test(counts ~ Treatment, proteo_ab)
+kruskal.test(counts ~ Treatment, verru_ab)
+```
+
+# 5E. Stacked bar plot - Phylum-level ASVs (non-DNase-treated,  O horizon) 
+```{r}
+ov.asv <- asv[,heat_map$Horizon=="O"&heat_map$Sample=="Virome"] %>%
+  rmv_sngl()
+# ov.asv.rarecurve <- rarecurve(t(ov.asv), step = 100)
+ov.asv.rare <- t(rrarefy(t(ov.asv), sample = 32000))
+ov.asv.rare <- data.frame(ov.asv.rare) %>%
+  rmv_sngl()
+ov_map <- subset(heat_map, Horizon=="O"&heat_map$Sample=="Virome")
+
+# SUBSET BY O HORIZON (virome)
+ov.asv.rare$OTU_ID <- rownames(ov.asv.rare)
+
+# Join taxonomy and abundance data together
+ov_tax_heat <- left_join(ov.asv.rare, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(ov.asv.rare[[check_column]] == ov_tax_heat[[check_column]])
+# pivot table and group by Phylum
+ov_tax_heat.long <- pivot_longer(ov_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
+ov.heat.phylum.long <- group_by(ov_tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# rarefied to 32,000
+# collapse phyla into "other" category if represents less than 1%, which is 320
+ov.heat.phylum.long$Phylum <- as.character(ov.heat.phylum.long$Phylum)
+
+ov.heat.phylum.long <- ov.heat.phylum.long %>%
+  group_by(Phylum) %>%
+  mutate(NewPhylum = ifelse(all(counts < 320), 'Other', Phylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+ov.heat.phylum.map <- merge(ov.heat.phylum.long, ov_map, by="ID")
+ov.heat.phylum.map <- ov.heat.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+ov.heat.phylum.map$TreatRep <- factor(ov.heat.phylum.map$TreatRep, levels = unique(ov.heat.phylum.map$TreatRep))
+
+# Calculating Percentages
+percentage_ov <- ov.heat.phylum.map %>%
+  group_by(ID) %>%
+  mutate(Phylum_Percentage = counts / sum(counts) * 100)
+
+percentage_patescibacteria <- percentage_ov %>%
+  filter(NewPhylum == "Patescibacteria") %>%
+  group_by(TempGroup) %>%
+  summarise(avg_percent = mean(Phylum_Percentage, na.rm = TRUE))
+
+# Plot
+OVphylumID <- ggplot(ov.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
+    labs(x="Sample ID", 
+       y ="Relative Abundance",
+       title = "16S rRNA ASV Profile by Sample (O, Untreated Virome)")+
+  geom_bar(stat="identity", position = "fill")+
+  geom_vline(xintercept = c(3.5, 6.5, 9.5, 12.5), linetype = "solid", color = "black", size = 1)+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")
+
+OVphylumID <- ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/StackedBarPlot/OVID_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+
+# Statistics
+acido_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Acidobacteriota")
+actino_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota")
+bact_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Bacteroidota")
+firm_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Firmicutes")
+myxo_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Myxococcota")
+patesci_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Patescibacteria")
+plancto_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Planctomycetota")
+proteo_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Proteobacteria")
+verru_ov <- ov.heat.phylum.map %>%
+  filter(Phylum == "Verrucomicrobiota")
+
+kruskal.test(counts ~ Treatment, acido_ov)
+kruskal.test(counts ~ Treatment, actino_ov)
+kruskal.test(counts ~ Treatment, bact_ov)
+kruskal.test(counts ~ Treatment, firm_ov)
+kruskal.test(counts ~ Treatment, myxo_ov)
+kruskal.test(counts ~ Treatment, patesci_ov)
+kruskal.test(counts ~ Treatment, plancto_ov)
+kruskal.test(counts ~ Treatment, proteo_ov)
+kruskal.test(counts ~ Treatment, verru_ov)
+```
+
+# 5F. Stacked bar plot - Phylum-level ASVs (non-DNase-treated,  A horizon) 
+```{r}
+av.asv <- asv[,heat_map$Horizon=="A"&heat_map$Sample=="Virome"] %>%
+  rmv_sngl()
+# av.asv.rarecurve <- rarecurve(t(av.asv), step = 100)
+av.asv.rare <- t(rrarefy(t(av.asv), sample = 48000))
+av.asv.rare <- data.frame(av.asv.rare) %>%
+  rmv_sngl()
+av_map <- subset(heat_map, Horizon=="A"&heat_map$Sample=="Virome")
+
+av.asv.rare$OTU_ID <- rownames(av.asv.rare)
+
+# Join taxonomy and abundance data together
+av_tax_heat <- left_join(av.asv.rare, tax_filtered, by = "OTU_ID")
+# make sure heat.asv is in the same order as tax_heat (return = TRUE)
+check_column <- "OTU_ID"
+all(av.asv.rare[[check_column]] == av_tax_heat[[check_column]])
+# pivot table and group by Phylum
+av_tax_heat.long <- pivot_longer(av_tax_heat, cols=1:15, names_to = "ID", values_to = "counts")
+av.heat.phylum.long <- group_by(av_tax_heat.long, Phylum, ID) %>%
+  summarize(counts=sum(counts))
+
+# rarefied to 48,000
+# collapse phyla into "other" category if represents less than 1%, which is 480
+av.heat.phylum.long$Phylum <- as.character(av.heat.phylum.long$Phylum)
+
+av.heat.phylum.long <- av.heat.phylum.long %>%
+  group_by(Phylum) %>%
+  mutate(NewPhylum = ifelse(all(counts < 480), 'Other', Phylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+av.heat.phylum.map <- merge(av.heat.phylum.long, av_map, by="ID")
+av.heat.phylum.map <- av.heat.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+
+av.heat.phylum.map$TreatRep <- factor(av.heat.phylum.map$TreatRep, levels = unique(av.heat.phylum.map$TreatRep))
+
+# Calculating Percentages
+percentage_av <- av.heat.phylum.map %>%
+  group_by(ID) %>%
+  mutate(Phylum_Percentage = counts / sum(counts) * 100)
+
+percentage_patescibacteria <- percentage_av %>%
+  filter(NewPhylum == "Patescibacteria") %>%
+  group_by(TempGroup) %>%
+  summarise(avg_percent = mean(Phylum_Percentage, na.rm = TRUE))
+
+# Plot
+AVphylumID <- ggplot(av.heat.phylum.map, aes(x=TreatRep, y=counts, fill=factor(NewPhylum, level=phyla_order)))+
+    labs(x="Sample ID", 
+       y ="Relative Abundance",
+       title = "16S rRNA ASV Profile by Sample (A, Untreated Virome)")+
+  geom_bar(stat="identity", position = "fill")+
+  geom_vline(xintercept = c(3.5, 6.5, 9.5, 12.5), linetype = "solid", color = "black", size = 1)+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")
+
+AVphylumID <- ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/StackedBarPlot/AVID_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+
+# Statistics
+acido_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Acidobacteriota")
+actino_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Actinobacteriota")
+bact_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Bacteroidota")
+chloro_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Chloroflexi")
+firm_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Firmicutes")
+myxo_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Myxococcota")
+patesci_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Patescibacteria")
+plancto_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Planctomycetota")
+proteo_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Proteobacteria")
+verru_av <- av.heat.phylum.map %>%
+  filter(Phylum == "Verrucomicrobiota")
+
+kruskal.test(counts ~ Treatment, acido_av)
+kruskal.test(counts ~ Treatment, actino_av)
+kruskal.test(counts ~ Treatment, bact_av)
+kruskal.test(counts ~ Treatment, chloro_av)
+kruskal.test(counts ~ Treatment, firm_av)
+kruskal.test(counts ~ Treatment, myxo_av)
+kruskal.test(counts ~ Treatment, patesci_av)
+kruskal.test(counts ~ Treatment, plancto_av)
+kruskal.test(counts ~ Treatment, proteo_av)
+kruskal.test(counts ~ Treatment, verru_av)
+```
+
+# SUPPLEMENTARY FIGURE 1
+# S1A. PCoA - DNase-treated viromes - O horizon (color = treatment, shape = virome type)
+```{r}
+od.otu <- otu[,metadata$Horizon=="O"&metadata$Virome=="DNase"] %>%
+  rmv_sngl()
+od.otu.rel <- relativize(od.otu)
+colSums(od.otu.rel)
+od.map <- subset(metadata, Horizon=="O"&metadata$Virome=="DNase")
+od.count <- otu.count[,metadata$Horizon=="O"&metadata$Virome=="DNase"]
+od.count <- rmv_sngl(od.count)
+
+od.otu.dist <- distance(od.otu.rel)
+od.otu.pcoa <- pcoa(od.otu.dist)
+od.otu.pcoa.points <- pcoa.points(od.otu.pcoa)
+od.otu.map <- pcoa.map(od.otu.pcoa.points, od.map)
+variance(od.otu.pcoa, 1)
+variance(od.otu.pcoa, 2)
+
+ggplot(od.otu.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment))+
+  scale_fill_manual(values=temp_DNase_colors, limits=temp_DNase_order) +
+  scale_color_manual(values=temp_DNase_colors, limits=temp_DNase_order) +
+    geom_point(size = 6, stroke = 1, shape = 21, color = "black") + # Points with black outline
+  labs(x = "PCo1 (53.64% Variance Explained)", 
+       y = "PCo2 (15.31% Variance Explained)",
+       title = "O Horizon - DNase-treated Viromes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S1A.pdf", width = 180, height = 125, units = "mm", dpi = 500)
+```
+
+# S1B. PCoA - DNase-treated viromes - A horizon (color = treatment, shape = virome type)
+```{r}
+ad.otu <- otu[,metadata$Horizon=="A"&metadata$Virome=="DNase"] %>%
+  rmv_sngl()
+ad.otu.rel <- relativize(ad.otu)
+colSums(ad.otu.rel)
+ad.map <- subset(metadata, Horizon=="A"&metadata$Virome=="DNase")
+ad.count <- otu.count[,metadata$Horizon=="A"&metadata$Virome=="DNase"]
+ad.count <- rmv_sngl(ad.count)
+
+ad.otu.dist <- distance(ad.otu.rel)
+ad.otu.pcoa <- pcoa(ad.otu.dist)
+ad.otu.pcoa.points <- pcoa.points(ad.otu.pcoa)
+ad.otu.map <- pcoa.map(ad.otu.pcoa.points, ad.map)
+variance(ad.otu.pcoa, 1)
+variance(ad.otu.pcoa, 2)
+
+ggplot(ad.otu.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment))+
+  scale_fill_manual(values=temp_DNase_colors, limits=temp_DNase_order) +
+  scale_color_manual(values=temp_DNase_colors, limits=temp_DNase_order) +
+    geom_point(size = 6, stroke = 1, shape = 21, color = "black") + # Points with black outline
+  labs(x = "PCo1 (49.91% Variance Explained)", 
+       y = "PCo2 (13.67% Variance Explained)",
+       title = "A Horizon - DNase-treated Viromes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S1B.pdf", width = 180, height = 125, units = "mm", dpi = 500)
+```
+
+# S1C. PCoA - non-DNase-treated viromes - O horizon (color = treatment, shape = virome type)
+```{r}
+on.otu <- otu[,metadata$Horizon=="O"&metadata$Virome=="NonDNase"] %>%
+  rmv_sngl()
+on.otu.rel <- relativize(on.otu)
+colSums(on.otu.rel)
+on.map <- subset(metadata, Horizon=="O"&metadata$Virome=="NonDNase")
+on.count <- otu.count[,metadata$Horizon=="O"&metadata$Virome=="NonDNase"]
+on.count <- rmv_sngl(on.count)
+
+on.otu.dist <- distance(on.otu.rel)
+on.otu.pcoa <- pcoa(on.otu.dist)
+on.otu.pcoa.points <- pcoa.points(on.otu.pcoa)
+on.otu.map <- pcoa.map(on.otu.pcoa.points, on.map)
+variance(on.otu.pcoa, 1)
+variance(on.otu.pcoa, 2)
+
+ggplot(on.otu.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+    geom_point(size = 6, stroke = 1, shape = 24, color = "black") + # Points with black outline
+  labs(x = "PCo1 (68.28% Variance Explained)", 
+       y = "PCo2 (12.05% Variance Explained)",
+       title = "O Horizon - non-DNase-treated Viromes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S1C.pdf", width = 180, height = 125, units = "mm", dpi = 500)
+
+```
+
+# S1D. PCoA - non-DNase-treated viromes - A horizon (color = treatment, shape = virome type)
+```{r}
+an.otu <- otu[,metadata$Horizon=="A"&metadata$Virome=="NonDNase"] %>%
+  rmv_sngl()
+an.otu.rel <- relativize(an.otu)
+colSums(an.otu.rel)
+an.map <- subset(metadata, Horizon=="A"&metadata$Virome=="NonDNase")
+an.count <- otu.count[,metadata$Horizon=="A"&metadata$Virome=="NonDNase"]
+an.count <- rmv_sngl(an.count)
+
+an.otu.dist <- distance(an.otu.rel)
+an.otu.pcoa <- pcoa(an.otu.dist)
+an.otu.pcoa.points <- pcoa.points(an.otu.pcoa)
+an.otu.map <- pcoa.map(an.otu.pcoa.points, an.map)
+variance(an.otu.pcoa, 1)
+variance(an.otu.pcoa, 2)
+
+ggplot(an.otu.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+    geom_point(size = 6, stroke = 1, shape = 24, color = "black") + # Points with black outline
+  labs(x = "PCo1 (49.01% Variance Explained)", 
+       y = "PCo2 (16.77% Variance Explained)",
+       title = "A Horizon - non-DNase-treated Viromes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S1D.pdf", width = 180, height = 125, units = "mm", dpi = 500)
+```
+
+# S1E-F: Host Prediction
+```{r}
+iphop.genus <- read.csv("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/input data/all_Host_prediction_to_genus_m90.csv")
+iphop.filter <- iphop.genus %>%
+  group_by(Virus) %>%
+  filter(Confidence.score == max(Confidence.score)) %>%
+  ungroup()
+colnames(iphop.filter)[colnames(iphop.filter) == "Virus"] <- "OTU"
+
+# to determine if there are duplicates
+length(unique(iphop.filter$OTU))
+# remove exact duplicates
+iphop.uniq <- iphop.filter %>%
+  distinct()
+# to investigate the other duplicates use this and keep repeating until all duplicates are taken care of
+duplicates <- iphop.uniq %>% filter(duplicated(OTU) | duplicated(OTU, fromLast = TRUE))
+# remove duplicates that are the same except for different HostGenus and change that value to "mixed"
+iphop.uniq <- iphop.uniq %>%
+  group_by(OTU) %>%
+  mutate(HostGenus = ifelse(n_distinct(HostGenus) > 1, "mixed", HostGenus)) %>%
+  ungroup()
+# remove duplicates that are the same except for List.of.methods and just take the one that is better (need to specify)
+iphop.uniq <- iphop.uniq %>%
+  filter(!(OTU == "C9_S57_L004_contig_2815" & List.of.methods == "iPHoP-RF;97.10 CRISPR;88.50"))
+iphop.uniq <- iphop.uniq %>%
+  filter(!(OTU == "HD2_S9_L004_contig_918" & List.of.methods == "iPHoP-RF;96.40"))
+iphop.uniq <- iphop.uniq %>%
+  filter(!(OTU == "HD5_S15_L004_contig_1958" & List.of.methods == "iPHoP-RF;97.10"))
+# there is still one duplicate left, but no clear reason to pick one or the other...so I'm randomly just picking one of them
+iphop.uniq <- iphop.uniq %>%
+  filter(!(OTU == "C9_S57_L004_contig_4327" & HostPhylum == "Cyanobacteria"))
+# remove exact duplicates
+iphop.uniq <- iphop.uniq %>%
+  distinct()
+
+#create dataframe with just OTU and phylum from iphop
+iphop.phylum <- iphop.uniq[, c("OTU", "HostPhylum")]
+```
+
+# S1E. Stacked bar plot - Predicted host - DNase-treated - O horizon
+```{r}
+# name row.names of otu.rel
+od.otu.rel.otu <- od.otu.rel %>%
+  rownames_to_column(var = "OTU")
+
+od.otu.rel.phylum <- merge(iphop.phylum, od.otu.rel.otu, by = "OTU", all.y = TRUE)
+# replace NA Host Phylum with "unknown"
+od.otu.rel.phylum <- od.otu.rel.phylum %>% mutate(HostPhylum = ifelse(is.na(HostPhylum), "Unknown", HostPhylum))
+# remove OTU column (maybe not)
+od.otu.rel.phylum <- od.otu.rel.phylum %>% select(-OTU) 
+
+od.otu.phylum.long <- pivot_longer(od.otu.rel.phylum, cols=2:13, names_to = "ID", values_to = "RelAbd")
+
+od.otu.phylum.stack <- group_by(od.otu.phylum.long, HostPhylum, ID) %>%
+  summarize(RelAbd=sum(RelAbd))
+
+od.otu.phylum.stack <- od.otu.phylum.stack %>%
+  group_by(HostPhylum) %>%
+  mutate(NewHostPhylum = ifelse(all(RelAbd < 0.001), 'Other', HostPhylum)) %>%
+  ungroup()
+
+# Prep data frame for plotting
+od.otu.phylum.map <- merge(od.otu.phylum.stack, od.map, by="ID")
+
+od.otu.phylum.map <- od.otu.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+
+od.otu.phylum.map$TreatRep <- factor(od.otu.phylum.map$TreatRep, levels = unique(od.otu.phylum.map$TreatRep))
+
+unique(od.otu.phylum.map$HostPhylum)
+
+# Plot
+od.otu.phylum.map <- od.otu.phylum.map[od.otu.phylum.map$HostPhylum != "Unknown", ]
+
+ODhostphylum2 <- ggplot(od.otu.phylum.map, aes(x=TreatRep, y=RelAbd, fill=factor(NewHostPhylum, level=phyla_order)))+
+    labs(x="Sample", 
+       y ="Relative Abundance",
+       title = "vOTU Host Prediction by Sample (O, DNase)")+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  geom_vline(xintercept = c(3.5, 6.5, 9.5), linetype = "solid", color = "black", linewidth = 1)+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")
+ODhostphylum2
+ODhostphylum2 <- ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/StackedBarPlot/ODhostheat2_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+```
+
+# S1F. Stacked bar plot - Predicted host - DNase-treated - A horizon
+```{r}
+# name row.names of otu.rel
+ad.otu.rel.otu <- ad.otu.rel %>%
+  rownames_to_column(var = "OTU")
+
+ad.otu.rel.phylum <- merge(iphop.phylum, ad.otu.rel.otu, by = "OTU", all.y = TRUE)
+# replace NA Host Phylum with "unknown"
+ad.otu.rel.phylum <- ad.otu.rel.phylum %>% mutate(HostPhylum = ifelse(is.na(HostPhylum), "Unknown", HostPhylum))
+# remove OTU column (maybe not)
+ad.otu.rel.phylum <- ad.otu.rel.phylum %>% select(-OTU) 
+
+ad.otu.phylum.long <- pivot_longer(ad.otu.rel.phylum, cols=2:13, names_to = "ID", values_to = "RelAbd")
+
+ad.otu.phylum.stack <- group_by(ad.otu.phylum.long, HostPhylum, ID) %>%
+  summarize(RelAbd=sum(RelAbd))
+
+ad.otu.phylum.stack <- ad.otu.phylum.stack %>%
+  group_by(HostPhylum) %>%
+  mutate(NewHostPhylum = ifelse(all(RelAbd < 0.001), 'Other', HostPhylum)) %>%
+  ungroup()
+# Prep data frame for plotting
+ad.otu.phylum.map <- merge(ad.otu.phylum.stack, ad.map, by="ID")
+
+ad.otu.phylum.map <- ad.otu.phylum.map %>% 
+  mutate(Order = case_when(
+    Treatment == "Field" ~ "1",
+    Treatment == "Control" ~ "2", 
+    Treatment == "30ºC" ~ "3", 
+    Treatment == "60ºC" ~ "4")) %>%
+  arrange(Order) %>%
+  mutate(TreatRep = paste(Treatment, Replicate))
+
+ad.otu.phylum.map$TreatRep <- factor(ad.otu.phylum.map$TreatRep, levels = unique(ad.otu.phylum.map$TreatRep))
+
+unique(ad.otu.phylum.map$HostPhylum)
+
+# Plot
+ad.otu.phylum.map <- ad.otu.phylum.map[ad.otu.phylum.map$HostPhylum != "Unknown", ]
+
+ADhostphylum2 <- ggplot(ad.otu.phylum.map, aes(x=TreatRep, y=RelAbd, fill=factor(NewHostPhylum, level=phyla_order)))+
+    labs(x="Sample", 
+       y ="Relative Abundance",
+       title = "vOTU Host Prediction by Sample (A, DNase)")+
+  geom_bar(stat="identity")+
+  scale_fill_manual(values=collapsed_phylum_colors, limits = phyla_order) +
+  geom_vline(xintercept = c(3.5, 6.5, 9.5), linetype = "solid", color = "black", linewidth = 1)+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")
+ADhostphylum2
+ADhostphylum2 <- ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/StackedBarPlot/ADhostheat2_phylum.pdf", width = 200, height = 150, units = "mm", dpi = 500)
+```
+
+# SUPPLEMENTARY FIGURE 2
+# S2A. PCoA - all ASVs (colors = horizon, shapes = sample type)
+```{r}
+#rarefy
+#asv.rarecurve <- rarecurve(t(asv), step = 100)
+#based on curves, choose sample size to rarefy to
+set.seed(24)
+asv.rare <- t(rrarefy(t(asv), sample = 25000))
+asv.rare <- data.frame(asv.rare) %>%
+  rmv_sngl()
+#bray-curtis dissimilarity distance matrix 
+asv.dist=vegdist(t(asv.rare), method = "bray")
+asv.pcoa <- pcoa(asv.dist)
+asv.pcoa.points <- pcoa.points(asv.pcoa)
+asv.map <- pcoa.map(asv.pcoa.points, heat_map)
+variance(asv.pcoa, 1)
+variance(asv.pcoa, 2)
+
+ggplot(asv.map, aes(x=pcoa1, y=pcoa2, fill=Horizon, color=Horizon, shape = Sample))+
+  scale_fill_manual(values=horizon_colors, limits=horizon_order) +
+  scale_color_manual(values=horizon_colors, limits=horizon_order) +
+  scale_shape_manual(values = c("Total" = 21, "Virome" = 24)) +
+  geom_point(size = 6, stroke = 1, color = "black") + # Points with black outline
+  labs(x = "PCo1 (35.28% Variance Explained)", 
+       y = "PCo2 (21.13% Variance Explained)")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "right") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+  guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S2A.pdf", width = 180, height = 125, units = "mm", dpi = 500)
+
+```
+
+# S2B - PCoA - total DNA ASVs, O horizon
+```{r}
+ob.asv <- asv[,heat_map$Horizon=="O"&heat_map$Sample=="Total"] %>%
+  rmv_sngl()
+#ob.asv.rarecurve <- rarecurve(t(ob.asv), step = 100)
+set.seed(24)
+ob.asv.rare <- t(rrarefy(t(ob.asv), sample = 32000))
+ob.asv.rare <- data.frame(ob.asv.rare) %>%
+  rmv_sngl()
+ob_map <- subset(heat_map, Horizon=="O"&heat_map$Sample=="Total")
+
+ob.asv.dist=vegdist(t(ob.asv.rare), method = "bray")
+ob.asv.pcoa <- pcoa(ob.asv.dist)
+ob.asv.pcoa.points <- pcoa.points(ob.asv.pcoa)
+ob.asv.map <- pcoa.map(ob.asv.pcoa.points, heat_map)
+variance(ob.asv.pcoa, 1)
+variance(ob.asv.pcoa, 2)
+
+ggplot(ob.asv.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  geom_point(size = 6, stroke = 1, color = "black", shape = 21) + # Points with black outline
+  labs(x = "PCo1 (38.24% Variance Explained)", 
+       y = "PCo2 (13.55% Variance Explained)",
+       title = "O Horizon, Total DNA - Prokaryotes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "bottom") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S2B.pdf", width = 150, height = 125, units = "mm", dpi = 500)
+
+adonis(ob.asv.dist
+~ob.asv.map$'Temp')
+```
+
+# S2C - PCoA - total DNA ASVs, A horizon
+```{r}
+ab.asv <- asv[,heat_map$Horizon=="A"&heat_map$Sample=="Total"] %>%
+  rmv_sngl()
+#ab.asv.rarecurve <- rarecurve(t(ab.asv), step = 100)
+set.seed(24)
+ab.asv.rare <- t(rrarefy(t(ab.asv), sample = 28000))
+ab.asv.rare <- data.frame(ab.asv.rare) %>%
+  rmv_sngl()
+ab_map <- subset(heat_map, Horizon=="A"&heat_map$Sample=="Total")
+
+ab.asv.dist=vegdist(t(ab.asv.rare), method = "bray")
+ab.asv.pcoa <- pcoa(ab.asv.dist)
+ab.asv.pcoa.points <- pcoa.points(ab.asv.pcoa)
+ab.asv.map <- pcoa.map(ab.asv.pcoa.points, heat_map)
+variance(ab.asv.pcoa, 1)
+variance(ab.asv.pcoa, 2)
+
+ggplot(ab.asv.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  geom_point(size = 6, stroke = 1, color = "black", shape = 21) + # Points with black outline
+  labs(x = "PCo1 (44.21% Variance Explained)", 
+       y = "PCo2 (9.63% Variance Explained)",
+       title = "A Horizon, Total DNA - Prokaryotes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "bottom") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S2C.pdf", width = 150, height = 125, units = "mm", dpi = 500)
+
+adonis(ab.asv.dist
+~ab.asv.map$'Temp')
+# p = 0.001
+```
+
+# S2D - PCoA - non-DNase-treated ASVs, O horizon
+```{r}
+ov.asv <- asv[,heat_map$Horizon=="O"&heat_map$Sample=="Virome"] %>%
+  rmv_sngl()
+# ov.asv.rarecurve <- rarecurve(t(ov.asv), step = 100)
+set.seed(24)
+ov.asv.rare <- t(rrarefy(t(ov.asv), sample = 32000))
+ov.asv.rare <- data.frame(ov.asv.rare) %>%
+  rmv_sngl()
+ov_map <- subset(heat_map, Horizon=="O"&heat_map$Sample=="Virome")
+
+ov.asv.dist=vegdist(t(ov.asv.rare), method = "bray")
+ov.asv.pcoa <- pcoa(ov.asv.dist)
+ov.asv.pcoa.points <- pcoa.points(ov.asv.pcoa)
+ov.asv.map <- pcoa.map(ov.asv.pcoa.points, heat_map)
+variance(ov.asv.pcoa, 1)
+variance(ov.asv.pcoa, 2)
+
+ggplot(ov.asv.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  geom_point(size = 6, stroke = 1, color = "black", shape = 24) + # Points with black outline
+  labs(x = "PCo1 (58.40% Variance Explained)", 
+       y = "PCo2 (13.92% Variance Explained)",
+       title = "O Horizon, Virome - Prokaryotes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "bottom") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S2D.pdf", width = 150, height = 125, units = "mm", dpi = 500)
+
+adonis(ov.asv.dist
+~ov.asv.map$'Temp')
+```
+
+# S2E - PCoA - non-DNase-treated ASVs, A horizon
+```{r}
+av.asv <- asv[,heat_map$Horizon=="A"&heat_map$Sample=="Virome"] %>%
+  rmv_sngl()
+# av.asv.rarecurve <- rarecurve(t(av.asv), step = 100)
+set.seed(24)
+av.asv.rare <- t(rrarefy(t(av.asv), sample = 48000))
+av.asv.rare <- data.frame(av.asv.rare) %>%
+  rmv_sngl()
+av_map <- subset(heat_map, Horizon=="A"&heat_map$Sample=="Virome")
+
+av.asv.dist=vegdist(t(av.asv.rare), method = "bray")
+av.asv.pcoa <- pcoa(av.asv.dist)
+av.asv.pcoa.points <- pcoa.points(av.asv.pcoa)
+av.asv.map <- pcoa.map(av.asv.pcoa.points, heat_map)
+variance(av.asv.pcoa, 1)
+variance(av.asv.pcoa, 2)
+
+ggplot(av.asv.map, aes(x=pcoa1, y=pcoa2, fill=Treatment, color = Treatment))+
+  scale_fill_manual(values=temp_colors, limits=temp_order) +
+  scale_color_manual(values=temp_colors, limits=temp_order) +
+  geom_point(size = 6, stroke = 1, color = "black", shape = 24) + # Points with black outline
+  labs(x = "PCo1 (65.20% Variance Explained)", 
+       y = "PCo2 (13.73% Variance Explained)",
+       title = "A Horizon, Virome - Prokaryotes")+
+  theme(axis.title = element_text(size = 16)) +
+  theme(legend.text = element_text(size = 16), legend.position = "bottom") +
+  theme(legend.title = element_text(size = 16)) +
+  theme(axis.text = element_text(size = 16)) +
+  theme(panel.background=element_rect(fill="white"), 
+      panel.grid.major = element_line(color = "lightgrey"), 
+      panel.grid.minor = element_line(color = "lightgrey")) +
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black")),
+         shape = guide_legend(override.aes = list(fill = "white", color = "black")))
+
+ggsave("C:/Users/segeo/Box Sync/EmersonLab/Research/Ch1SoilHeating/R_Figures/pdf/PCoA/S2E.pdf", width = 150, height = 125, units = "mm", dpi = 500)
+
+adonis(av.asv.dist
+~av.asv.map$'Temp')
+```
+
